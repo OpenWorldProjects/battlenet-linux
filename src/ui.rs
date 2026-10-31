@@ -1235,7 +1235,15 @@ impl Launcher {
             b.min + egui::vec2(24.0, 165.0),
             egui::pos2(split - 24.0, b.bottom() - 117.0),
         );
+        // Use logical points so the same limit works at every display scale.
+        // Keep the social sidebar at the window edge; center the readable page
+        // within the remaining space instead of stretching artwork indefinitely.
+        let body = Rect::from_center_size(
+            body.center(),
+            egui::vec2(body.width().min(1280.0), body.height()),
+        );
         ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+            ui.set_width(body.width());
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {

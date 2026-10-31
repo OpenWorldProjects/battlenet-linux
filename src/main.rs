@@ -322,6 +322,9 @@ impl Launcher {
             if std::env::args().any(|arg| arg == "--preview-collapsed") {
                 app.sidebar_open = false;
             }
+            if std::env::args().any(|arg| arg == "--preview-ultrawide") {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(3440.0, 1440.0)));
+            }
             if std::env::args().any(|arg| arg == "--preview-small") {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(960.0, 700.0)));
             }
