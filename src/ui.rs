@@ -188,35 +188,304 @@ pub(super) fn setup(ctx: &egui::Context) {
 }
 impl Launcher {
     fn game_sidebar(&mut self, ui: &mut egui::Ui, rect: Rect) {
-        ui.scope_builder(egui::UiBuilder::new().max_rect(rect),|ui|{
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_width(rect.width());
-            ui.label(RichText::new("CHATS AND FRIENDS").font(bold(12.0)).color(MUTED));ui.add_space(12.0);
-            if self.chat.connection.is_some(){ui.horizontal(|ui|{ui.label(if self.chat.connected{"Connected"}else{"Connecting…"});if ui.small_button("Disconnect").clicked(){self.chat.disconnect();}});}
-            else if ui.add_enabled(self.account.is_some()&&self.pending.is_none(),egui::Button::new("Connect to chat").fill(BLUE)).clicked(){if let Some(account)=self.account.clone(){self.chat.status="Connecting…".into();self.chat.connection=Some(chat::Connection::start(self.game.region.clone(),account,ui.ctx().clone()));}}
-            if !self.chat.status.is_empty(){ui.add(egui::Label::new(RichText::new(&self.chat.status).size(12.0).color(if self.chat.error{Color32::from_rgb(240,145,132)}else{MUTED})).wrap());}
-            if self.account.is_none(){settings_note(ui,"Sign in to connect to Battle.net chat.");}
-            ui.add_space(12.0);ui.separator();
-            egui::ScrollArea::vertical().id_salt("sidebar-contacts").max_height(190.0).show(ui,|ui|{for contact in &self.chat.contacts{if ui.add_sized([rect.width(),32.0],egui::Button::new(&contact.name).selected(self.chat.selected==Some(contact.id))).clicked(){self.chat.selected=Some(contact.id);self.chat.unread=0;}}});
-            if let Some(friend)=self.chat.selected.and_then(|id|self.chat.contacts.iter().find(|f|f.id==id)).cloned(){
-                ui.add_space(12.0);ui.separator();ui.label(RichText::new(&friend.name).strong());
-                let height=(rect.bottom()-ui.cursor().top()-175.0).max(100.0);
-                egui::ScrollArea::vertical().id_salt(("sidebar-messages",friend.id.high,friend.id.low)).stick_to_bottom(true).max_height(height).min_scrolled_height(height).show(ui,|ui|{ui.set_max_width(rect.width()-12.0);for message in self.chat.messages.iter().filter(|m|m.peer==friend.id){ui.label(RichText::new(if message.outgoing{"You"}else{&message.name}).size(11.0).color(MUTED));ui.add(egui::Label::new(&message.text).wrap());ui.add_space(8.0);}});
-                ui.add_enabled_ui(self.chat.connected,|ui|{let edit=ui.add_sized([rect.width(),34.0],egui::TextEdit::singleline(&mut self.chat.draft).hint_text("Write a message…").char_limit(4096));let send=ui.button("Send").clicked()||edit.lost_focus()&&ui.input(|i|i.key_pressed(egui::Key::Enter));if send&&!self.chat.draft.trim().is_empty(){if self.chat.draft.len()>4096{self.chat.status="Message is too long.".into();}else if let Some(connection)=&self.chat.connection{if connection.commands.send(chat::Command::Send(friend.clone(),self.chat.draft.clone())).is_ok(){self.chat.draft.clear();self.chat.status="Sending…".into();edit.request_focus();}}}});
-            }else{ui.add_space(20.0);settings_note(ui,if self.chat.connected{"Choose a contact to start a conversation."}else{"Connect to load contacts and receive messages. Chat stays available while you browse games."});}
+            ui.label(
+                RichText::new("CHATS AND FRIENDS")
+                    .font(bold(12.0))
+                    .color(MUTED),
+            );
+            ui.add_space(12.0);
+            if self.chat.connection.is_some() {
+                ui.horizontal(|ui| {
+                    ui.label(if self.chat.connected {
+                        "Connected"
+                    } else {
+                        "Connecting…"
+                    });
+                    if ui.small_button("Disconnect").clicked() {
+                        self.chat_paused = true;
+                        self.chat.disconnect();
+                    }
+                });
+            } else if ui
+                .add_enabled(
+                    self.signed_in_this_session && self.pending.is_none(),
+                    egui::Button::new("Connect to chat").fill(BLUE),
+                )
+                .clicked()
+            {
+                if let Some(account) = self.account.clone() {
+                    self.chat_paused = false;
+                    self.chat.status = "Connecting…".into();
+                    self.chat.connection = Some(chat::Connection::start(
+                        self.game.region.clone(),
+                        account,
+                        ui.ctx().clone(),
+                    ));
+                }
+            }
+            if !self.chat.status.is_empty() {
+                ui.add(
+                    egui::Label::new(RichText::new(&self.chat.status).size(12.0).color(
+                        if self.chat.error {
+                            Color32::from_rgb(240, 145, 132)
+                        } else {
+                            MUTED
+                        },
+                    ))
+                    .wrap(),
+                );
+            }
+            if self.account.is_none() {
+                settings_note(ui, "Sign in to connect to Battle.net chat.");
+            }
+            ui.add_space(12.0);
+            ui.separator();
+            let search_id = egui::Id::new("friend-search");
+            let mut search = ui
+                .ctx()
+                .data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
+            if !self.chat.contacts.is_empty() {
+                ui.add_space(10.0);
+                ui.add_sized(
+                    [rect.width(), 30.0],
+                    egui::TextEdit::singleline(&mut search)
+                        .hint_text("Find a friend")
+                        .char_limit(100),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(format!("Friends · {}", self.chat.contacts.len()))
+                        .size(12.0)
+                        .color(MUTED),
+                );
+            }
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(search_id, search.clone()));
+            egui::ScrollArea::vertical()
+                .id_salt("sidebar-contacts")
+                .max_height(190.0)
+                .show(ui, |ui| {
+                    for contact in self
+                        .chat
+                        .contacts
+                        .iter()
+                        .filter(|f| f.name.to_lowercase().contains(&search.to_lowercase()))
+                    {
+                        if ui
+                            .add_sized(
+                                [rect.width(), 38.0],
+                                egui::Button::new(
+                                    RichText::new(&contact.name)
+                                        .color(Color32::from_rgb(173, 211, 244)),
+                                )
+                                .selected(self.chat.selected == Some(contact.id)),
+                            )
+                            .clicked()
+                        {
+                            self.chat.selected = Some(contact.id);
+                            self.chat.unread = 0;
+                        }
+                    }
+                });
+            if let Some(friend) = self
+                .chat
+                .selected
+                .and_then(|id| self.chat.contacts.iter().find(|f| f.id == id))
+                .cloned()
+            {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.label(RichText::new(&friend.name).strong());
+                let height = (rect.bottom() - ui.cursor().top() - 175.0).max(100.0);
+                egui::ScrollArea::vertical()
+                    .id_salt(("sidebar-messages", friend.id.high, friend.id.low))
+                    .stick_to_bottom(true)
+                    .max_height(height)
+                    .min_scrolled_height(height)
+                    .show(ui, |ui| {
+                        ui.set_max_width(rect.width() - 12.0);
+                        for message in self.chat.messages.iter().filter(|m| m.peer == friend.id) {
+                            ui.label(
+                                RichText::new(if message.outgoing {
+                                    "You"
+                                } else {
+                                    &message.name
+                                })
+                                .size(11.0)
+                                .color(MUTED),
+                            );
+                            ui.add(egui::Label::new(&message.text).wrap());
+                            ui.add_space(8.0);
+                        }
+                    });
+                ui.add_enabled_ui(self.chat.connected, |ui| {
+                    let edit = ui.add_sized(
+                        [rect.width(), 34.0],
+                        egui::TextEdit::singleline(&mut self.chat.draft)
+                            .hint_text("Write a message…")
+                            .char_limit(4096),
+                    );
+                    let send = ui.button("Send").clicked()
+                        || edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if send && !self.chat.draft.trim().is_empty() {
+                        if self.chat.draft.len() > 4096 {
+                            self.chat.status = "Message is too long.".into();
+                        } else if let Some(connection) = &self.chat.connection {
+                            if connection
+                                .commands
+                                .send(chat::Command::Send(friend.clone(), self.chat.draft.clone()))
+                                .is_ok()
+                            {
+                                self.chat.draft.clear();
+                                self.chat.status = "Sending…".into();
+                                edit.request_focus();
+                            }
+                        }
+                    }
+                });
+            } else {
+                ui.add_space(20.0);
+                settings_note(
+                    ui,
+                    if self.chat.connected {
+                        "Choose a contact to start a conversation."
+                    } else {
+                        "Your friends and conversations will appear here."
+                    },
+                );
+            }
             ui.add_space(14.0);
-            egui::CollapsingHeader::new("Game management").show(ui,|ui|{if ui.button("Game settings").clicked(){self.settings=true;}if ui.button("Launch details").clicked(){self.open_details();}if ui.button("Open game folder").clicked(){if let Ok(root)=runner::install_root(&self.game){let _=runner::host_command("xdg-open").arg(root).spawn();}}});
-            if ui.small_button("Expand conversation").clicked(){self.chat.open=true;}
+            if self.chat.selected.is_some()
+                && ui
+                    .add_sized([rect.width(), 32.0], egui::Button::new("Open conversation"))
+                    .clicked()
+            {
+                self.chat.open = true;
+            }
+            if !self.session_note.is_empty() {
+                ui.add_space(12.0);
+                settings_note(ui, &self.session_note);
+            }
+            if !self.signed_in_this_session
+                && self.account.is_some()
+                && ui.button("Sign in again").clicked()
+            {
+                self.login(ui.ctx());
+            }
         });
     }
 
-    fn shop(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Shop").font(bold(28.0)).color(WHITE));
-        ui.add_space(8.0);
-        settings_note(
-            ui,
-            "Explore Blizzard games. Product links open the official store in your browser.",
+    fn featured_shop(&mut self, ui: &mut egui::Ui) {
+        let slides = [
+            (
+                "S2",
+                "StarCraft II",
+                "Three races. A galaxy of strategy.",
+                "Campaigns, co-op missions and competitive multiplayer.",
+            ),
+            (
+                "S1",
+                "StarCraft: Remastered",
+                "Return to the Koprulu Sector",
+                "Discover the original StarCraft and Brood War.",
+            ),
+            (
+                "Hero",
+                "Heroes of the Storm",
+                "Your heroes. Your team.",
+                "Bring Blizzard's heroes together in the Nexus.",
+            ),
+        ];
+        let id = egui::Id::new("store-slideshow");
+        let (mut index, mut since, mut paused) = ui.ctx().data_mut(|d| {
+            d.get_temp::<(usize, Instant, bool)>(id)
+                .unwrap_or((0, Instant::now(), false))
+        });
+        if !paused && since.elapsed() >= Duration::from_secs(8) {
+            index = (index + 1) % slides.len();
+            since = Instant::now();
+        }
+        if !paused {
+            ui.ctx().request_repaint_after(Duration::from_secs(1));
+        }
+        let (code, name, title, description) = slides[index];
+        let width = ui.available_width();
+        let height = (width * 0.33).clamp(230.0, 310.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
+        let art = match code {
+            "S1" => &self.art.starcraft,
+            "Hero" => &self.art.heroes,
+            _ => &self.art.hero,
+        };
+        let picture = Rect::from_min_max(
+            rect.min,
+            egui::pos2(rect.left() + width * 0.56, rect.bottom()),
         );
-        ui.add_space(20.0);
+        cover(ui.painter(), art, picture);
+        let details = Rect::from_min_max(picture.right_top(), rect.max);
+        ui.painter().rect_filled(details, 3, PANEL);
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(details.shrink(22.0)),
+            |ui| {
+                ui.label(RichText::new(name.to_uppercase()).size(11.0).color(ACCENT));
+                ui.add_space(12.0);
+                ui.label(RichText::new(title).font(bold(24.0)).color(WHITE));
+                ui.add_space(8.0);
+                ui.label(RichText::new(description).size(14.0).color(MUTED));
+            },
+        );
+        if action(
+            ui,
+            Rect::from_min_size(
+                details.left_bottom() + egui::vec2(22.0, -58.0),
+                egui::vec2((details.width() - 44.0).max(100.0), 36.0),
+            ),
+            "Explore in store ↗",
+            true,
+            true,
+        ) {
+            self.open_link(shop_link(code));
+        }
+        ui.advance_cursor_after_rect(rect);
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui
+                .small_button("‹")
+                .on_hover_text("Previous slide")
+                .clicked()
+            {
+                index = (index + slides.len() - 1) % slides.len();
+                since = Instant::now();
+            }
+            for i in 0..slides.len() {
+                let (dot, response) =
+                    ui.allocate_exact_size(egui::vec2(22.0, 24.0), Sense::click());
+                ui.painter().circle_filled(
+                    dot.center(),
+                    if index == i { 4.0 } else { 3.0 },
+                    if index == i { ACCENT } else { MUTED },
+                );
+                if response.clicked() {
+                    index = i;
+                    since = Instant::now();
+                }
+            }
+            if ui.small_button("›").on_hover_text("Next slide").clicked() {
+                index = (index + 1) % slides.len();
+                since = Instant::now();
+            }
+            ui.toggle_value(&mut paused, "Pause");
+        });
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(id, (index, since, paused)));
+        ui.add_space(22.0);
+    }
+    fn shop(&mut self, ui: &mut egui::Ui) {
+        self.featured_shop(ui);
+        ui.label(RichText::new("Browse games").font(bold(24.0)).color(WHITE));
+        ui.add_space(16.0);
         let id = egui::Id::new("shop-category");
         let mut category = ui.ctx().data_mut(|d| d.get_temp::<usize>(id).unwrap_or(0));
         ui.horizontal_wrapped(|ui| {
@@ -229,7 +498,8 @@ impl Launcher {
         });
         ui.ctx().data_mut(|d| d.insert_temp(id, category));
         ui.add_space(24.0);
-        let width = ((ui.available_width() - 32.0) / 3.0).clamp(170.0, 260.0);
+        let columns = (ui.available_width() / 240.0).floor().clamp(2.0, 4.0);
+        let width = (ui.available_width() - 16.0 * (columns - 1.0)) / columns;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(16.0, 16.0);
             for product in catalog::PRODUCTS
@@ -261,11 +531,13 @@ impl Launcher {
                 } else {
                     p.rect_filled(picture, 6, Color32::from_rgb(25, 39, 57));
                 }
-                image(
-                    p,
-                    self.game_icon(product.code),
-                    Rect::from_center_size(picture.center(), egui::vec2(66.0, 66.0)),
-                );
+                if !matches!(product.code, "S1" | "S2" | "Hero") {
+                    image(
+                        p,
+                        self.game_icon(product.code),
+                        Rect::from_center_size(picture.center(), egui::vec2(66.0, 66.0)),
+                    );
+                }
                 let title = p.layout(product.name.into(), bold(15.0), WHITE, width - 28.0);
                 p.galley(card.min + egui::vec2(14.0, 160.0), title, WHITE);
                 type_at(
@@ -299,8 +571,8 @@ impl Launcher {
             ui.add_space(12.0);
             ui.horizontal_wrapped(|ui|{
                 let status=if self.chat.status.is_empty(){"Chat is disconnected"}else{&self.chat.status};ui.label(RichText::new(status).color(if self.chat.error{Color32::from_rgb(240,145,132)}else if self.chat.connected{Color32::from_rgb(107,194,153)}else{MUTED}));
-                if self.chat.connection.is_some(){if ui.button("Disconnect").clicked(){self.chat.disconnect();}}
-                else if ui.add_enabled(self.account.is_some()&&self.pending.is_none(),egui::Button::new("Connect").fill(BLUE)).clicked(){if let Some(account)=self.account.clone(){self.chat.contacts.clear();self.chat.messages.clear();self.chat.status="Connecting…".into();self.chat.connection=Some(chat::Connection::start(self.game.region.clone(),account,ctx.clone()));}}
+                if self.chat.connection.is_some(){if ui.button("Disconnect").clicked(){self.chat_paused = true; self.chat.disconnect();}}
+                else if ui.add_enabled(self.signed_in_this_session&&self.pending.is_none(),egui::Button::new("Connect").fill(BLUE)).clicked(){if let Some(account)=self.account.clone(){self.chat_paused=false;self.chat.status="Connecting…".into();self.chat.connection=Some(chat::Connection::start(self.game.region.clone(),account,ctx.clone()));}}
             });ui.add_space(8.0);ui.separator();ui.add_space(8.0);
             if self.account.is_none(){settings_note(ui,"Sign in to your Battle.net account to connect to chat.");}
             else if !self.chat.connected && self.chat.contacts.is_empty(){settings_note(ui,"Connect to load your contacts and receive messages. Blizzard may open a sign-in window to authorize chat. Chat history is kept in memory for this launcher session.");ui.add_space(16.0);}
@@ -367,6 +639,8 @@ impl Launcher {
                             0=>{
                                 settings_section(ui,"Window behavior","Choose what happens when you close the launcher.");
                                 ui.add_enabled_ui(self.tray.available(),|ui|{ui.checkbox(&mut self.close_to_tray,"Keep running in the system tray");});
+                                ui.add_space(12.0);
+                                ui.checkbox(&mut self.auto_chat,"Connect to chat after sign-in");
                                 settings_note(ui,if self.tray.available(){"Use the tray menu to reopen or quit the launcher. Games keep running when the launcher closes."}else{"Your desktop is not currently providing a system tray. Closing the window will quit the launcher."});
                             }
                             1=>{
@@ -381,6 +655,9 @@ impl Launcher {
                                 if let Some(account)=&self.account {ui.label(RichText::new(account.battle_tag.as_deref().unwrap_or("Signed in")).size(20.0).strong());}
                                 ui.add_space(12.0);
                                 settings_note(ui,"Game authorization is managed separately for each title. Passwords are entered only on Blizzard's sign-in page.");
+                                ui.add_space(12.0);
+                                settings_note(ui,if self.session_verified {"Session verified with Battle.net."}else if self.session_note.is_empty(){"Saved account. Session will be checked with Battle.net."}else{&self.session_note});
+                                if ui.add_enabled(self.pending.is_none(),egui::Button::new("Renew sign-in")).clicked(){self.login(ctx);}
                                 ui.add_space(16.0);
                                 if ui.add_enabled(self.pending.is_none(),egui::Button::new("Sign out")).clicked(){let game=self.game.clone();self.job(move||Completed::Logout(runner::sign_out_account(&game)));self.app_settings=false;}
                             }
@@ -678,7 +955,7 @@ impl Launcher {
     pub(super) fn library_view(&mut self, ui: &mut egui::Ui) {
         let b = ui.max_rect();
         let p = ui.painter().clone();
-        let split = b.right() - 260.0;
+        let split = b.right() - if self.sidebar_open { 260.0 } else { 64.0 };
         p.rect_filled(
             Rect::from_min_max(egui::pos2(split, b.top()), b.max),
             0,
@@ -741,34 +1018,41 @@ impl Launcher {
             self.app_settings = true;
         }
         let avatar = Rect::from_min_size(
-            egui::pos2(split + 22.0, b.top() + 17.0),
+            egui::pos2(
+                split + if self.sidebar_open { 22.0 } else { 14.0 },
+                b.top() + 17.0,
+            ),
             egui::vec2(36.0, 36.0),
         );
         p.circle_filled(avatar.center(), 18.0, Color32::from_rgb(35, 45, 60));
         image(&p, &self.art.bnet, avatar.shrink(7.0));
-        type_at(
-            &p,
-            avatar.right_top() + egui::vec2(12.0, 1.0),
-            self.account
-                .as_ref()
-                .and_then(|account| account.battle_tag.as_deref())
-                .unwrap_or("Battle.net account"),
-            13.0,
-            WHITE,
-            true,
-        );
-        type_at(
-            &p,
-            avatar.right_top() + egui::vec2(12.0, 21.0),
-            if self.signed_in_this_session {
-                "Signed in"
-            } else {
-                "Not signed in"
-            },
-            11.0,
-            MUTED,
-            false,
-        );
+        if self.sidebar_open {
+            type_at(
+                &p,
+                avatar.right_top() + egui::vec2(12.0, 1.0),
+                self.account
+                    .as_ref()
+                    .and_then(|account| account.battle_tag.as_deref())
+                    .unwrap_or("Battle.net account"),
+                13.0,
+                WHITE,
+                true,
+            );
+            type_at(
+                &p,
+                avatar.right_top() + egui::vec2(12.0, 21.0),
+                if self.session_verified {
+                    "Signed in"
+                } else if self.signed_in_this_session {
+                    "Saved account"
+                } else {
+                    "Sign in required"
+                },
+                11.0,
+                MUTED,
+                false,
+            );
+        }
         let rail = Rect::from_min_max(
             b.min + egui::vec2(24.0, 83.0),
             egui::pos2(split - 24.0, b.top() + 141.0),
@@ -877,13 +1161,40 @@ impl Launcher {
                     }
                 });
         });
-        self.game_sidebar(
-            ui,
-            Rect::from_min_max(
-                egui::pos2(split + 20.0, b.top() + 88.0),
-                b.max - egui::vec2(20.0, 20.0),
+        let toggle = Rect::from_min_size(
+            egui::pos2(
+                split + if self.sidebar_open { 204.0 } else { 14.0 },
+                b.top() + if self.sidebar_open { 110.0 } else { 76.0 },
             ),
+            egui::vec2(36.0, 28.0),
         );
+        if action(
+            ui,
+            toggle,
+            if self.sidebar_open { "›" } else { "‹" },
+            false,
+            true,
+        ) {
+            self.sidebar_open = !self.sidebar_open;
+        }
+        if self.sidebar_open {
+            self.game_sidebar(
+                ui,
+                Rect::from_min_max(
+                    egui::pos2(split + 20.0, b.top() + 118.0),
+                    b.max - egui::vec2(20.0, 20.0),
+                ),
+            );
+        } else if self.chat.unread > 0 {
+            type_at(
+                &p,
+                egui::pos2(split + 20.0, b.top() + 122.0),
+                &self.chat.unread.to_string(),
+                12.0,
+                ACCENT,
+                true,
+            );
+        }
         let footer = Rect::from_min_max(
             egui::pos2(b.left(), b.bottom() - 101.0),
             egui::pos2(split, b.bottom()),
@@ -962,7 +1273,9 @@ impl Launcher {
         } else if let Some(message) = &update_message {
             message.as_str()
         } else if self.status.is_empty() {
-            if self.signed_in_this_session {
+            if runner::install_root(&self.game).is_err() {
+                "Not installed · Choose Install to get started"
+            } else if self.signed_in_this_session {
                 "Ready to launch"
             } else {
                 "Sign in to your Battle.net account"
@@ -1143,7 +1456,7 @@ impl Launcher {
     }
     fn product_home(&mut self, ui: &mut egui::Ui) {
         let width = ui.available_width();
-        let height = (width * 0.43).clamp(260.0, 480.0);
+        let height = (ui.clip_rect().height() * 0.53).clamp(240.0, 320.0);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
         let p = ui.painter();
         if matches!(self.game.product_code.as_str(), "S1" | "Hero") {
@@ -1178,9 +1491,27 @@ impl Launcher {
             false,
         );
         ui.add_space(24.0);
+        ui.label(
+            RichText::new("Discover the game")
+                .font(bold(20.0))
+                .color(WHITE),
+        );
+        ui.add_space(12.0);
         ui.label(RichText::new(match self.game.product_code.as_str(){"S1"=>"The original StarCraft and Brood War campaigns, with Remastered features available to licensed accounts.","Hero"=>"Team up with friends and bring Blizzard's heroes to the Nexus.",_=>"Install, update, and launch with your configured Wine or Proton runtime."}).size(15.0).color(MUTED));
         ui.add_space(16.0);
-        if ui.button("Visit official site").clicked() {
+        ui.horizontal(|ui| {
+            if ui.button("Shop game ↗").clicked() {
+                self.tab = 2;
+            }
+            if ui.button("Game settings").clicked() {
+                self.settings = true;
+            }
+            if ui.button("Launch details").clicked() {
+                self.open_details();
+            }
+        });
+        ui.add_space(12.0);
+        if ui.button("Visit official site ↗").clicked() {
             if let Ok(product) = catalog::product(&self.game.product_code) {
                 self.open_link(product.website);
             }

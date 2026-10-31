@@ -25,3 +25,11 @@ Game settings now provide native folder/executable pickers, bounded discovery of
 Scan & Repair streams checksums for indexed game data and loose install files, downloads replacements, and uses the existing staged/append-only update transaction. It targets the latest published build. Severely damaged CASC indexes/bootstrap metadata cannot currently be reconstructed automatically. The repair action has not been run against the user's game files during this change.
 
 Chat and contacts remain visible in the right sidebar. Conversations can also be expanded. Game management actions remain available below the social panel.
+
+## UI and session follow-up
+
+Game pages use a bounded hero rather than filling the content area with a single poster. The footer distinguishes missing installations from launch readiness. Chat occupies its own collapsible sidebar; game management stays on game pages, context menus, and the play controls. Sidebar visibility and automatic chat connection are saved preferences.
+
+The native shop has timed, pausable slides, previous/next and direct slide selection, responsive game cards, and category filters. Product actions open Blizzard’s store in the default browser. It is a curated game catalogue, not a synchronized store: live offers, prices, account balance and checkout are not implemented. No prices, sales, or news are fabricated.
+
+Account cookies are checked silently on startup and hourly. Confirmed expiry offers sign-in again; connectivity failures remain inconclusive and retry. Game authorizations renew through the managed browser after a 24-hour local reuse limit. See authentication.md for verification and limits.

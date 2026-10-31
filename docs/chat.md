@@ -1,6 +1,6 @@
 # Experimental Battle.net chat
 
-Open **Chats and friends** and press **Connect** after signing into the launcher. The connection uses the selected game region (EU, US, or KR). Blizzard may open the managed sign-in window to authorize its `app` client. This is separate from a game ticket; it uses the same private browser session.
+Chat connects after a verified sign-in by default. Settings → General can disable this. Manual Disconnect pauses automatic connection for this run; errors require a deliberate retry. The collapsible sidebar stays available on game and shop pages, supports contact search, and preserves the active conversation when collapsed. Open **Chats and friends** for a larger conversation window. The connection uses the selected game region (EU, US, or KR). Blizzard may open the managed sign-in window to authorize its `app` client. This is separate from a game ticket; it uses the same private browser session.
 
 The Rust backend implements TLS-verified Battle.net v2 framed protobuf RPC, current bindless service hashes, server web authorization challenges, account identity matching, friend subscriptions, BattleTag presence queries, incoming whispers, and outgoing whispers with server acknowledgement. Contacts and messages appear only from server responses. No online presence is fabricated. Successful send acknowledgement means the server accepted the request, not that a recipient read it.
 

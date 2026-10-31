@@ -66,6 +66,7 @@ fn prepare_view(
     popups: &Rc<RefCell<Vec<gtk::Window>>>,
     account: Option<&Rc<RefCell<Option<auth::Account>>>>,
     fixture: bool,
+    quiet: bool,
 ) {
     if let Some(account) = account {
         let result = account.clone();
@@ -139,6 +140,9 @@ fn prepare_view(
     let windows = popups.clone();
     let account_state = account.cloned();
     web.connect_create(move |parent, _| {
+        if quiet {
+            return None;
+        }
         let popup = webkit2gtk::WebView::with_related_view(parent);
         prepare_view(
             &popup,
@@ -147,6 +151,7 @@ fn prepare_view(
             &windows,
             account_state.as_ref(),
             fixture,
+            quiet,
         );
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
         window.set_title("Battle.net · Complete sign-in");
@@ -330,6 +335,7 @@ fn main() {
     }
     let account_mode =
         product.is_none() && (!fixture || args.iter().any(|arg| arg == "--test-account"));
+    let check_session = account_mode && args.iter().any(|arg| arg == "--check-session");
     let chat_mode = product.as_deref() == Some("app");
     let challenge = if args.iter().any(|a| a == "--chat-start-stdin") {
         if !chat_mode {
@@ -483,6 +489,7 @@ fn main() {
         &popups,
         if account_mode { Some(&account) } else { None },
         fixture,
+        check_session,
     );
     web.connect_web_process_terminated(|_, _| eprintln!("BNET_EVENT=web_process_terminated"));
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -512,8 +519,42 @@ fn main() {
         finish_window();
         gtk::glib::Propagation::Proceed
     });
-    window.show_all();
-    eprintln!("BNET_EVENT=window_opened");
+    if check_session {
+        // A check never presents credentials or interrupts the desktop. Only an
+        // actual login redirect proves expiry; transport failures are inconclusive.
+        web.connect_load_changed(move |web, event| {
+            if event == webkit2gtk::LoadEvent::Finished {
+                if let Some(uri) = web.uri() {
+                    if let Ok(url) = url::Url::parse(&uri) {
+                        let expired_fixture = fixture
+                            && url.scheme() == "http"
+                            && url.host_str() == Some("127.0.0.1")
+                            && url.path() == "/login-expired";
+                        if expired_fixture
+                            || (url.scheme() == "https"
+                                && matches!(
+                                    url.host_str(),
+                                    Some(
+                                        "account.battle.net"
+                                            | "eu.account.battle.net"
+                                            | "us.account.battle.net"
+                                            | "kr.account.battle.net"
+                                            | "account.battlenet.com.cn"
+                                    )
+                                )
+                                && url.path().starts_with("/login"))
+                        {
+                            std::process::exit(4);
+                        }
+                    }
+                }
+            }
+        });
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(20), finish_window);
+    } else {
+        window.show_all();
+        eprintln!("BNET_EVENT=window_opened");
+    }
     let startup_check = args.iter().any(|arg| arg == "--startup-check");
     if startup_check {
         gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(1200), finish_window);

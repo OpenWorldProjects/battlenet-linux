@@ -388,13 +388,14 @@ fn run_login(
     region: &str,
     product: Option<&str>,
 ) -> Result<Zeroizing<Vec<u8>>, String> {
-    run_login_start(helper, region, product, None)
+    run_login_start(helper, region, product, None, false)
 }
 fn run_login_start(
     helper: &Path,
     region: &str,
     product: Option<&str>,
     start: Option<&str>,
+    check_session: bool,
 ) -> Result<Zeroizing<Vec<u8>>, String> {
     use std::os::unix::process::ExitStatusExt;
     let mut version_command = Command::new(helper);
@@ -422,6 +423,9 @@ fn run_login_start(
         cmd.arg("--game").arg(product);
     } else {
         cmd.arg("--account");
+    }
+    if check_session {
+        cmd.arg("--check-session");
     }
     if start.is_some() {
         cmd.arg("--chat-start-stdin");
@@ -502,6 +506,9 @@ fn run_login_start(
         output.status.signal(),
         events.join(",")
     );
+    if check_session && output.status.code() == Some(4) {
+        return Err("SESSION_EXPIRED".into());
+    }
     if !output.status.success() {
         return Err(login_error(
             output.status.code(),
@@ -579,6 +586,37 @@ pub fn login_account(region: &str, helper: &Path) -> Result<Account, String> {
     remember_account(&account)?;
     Ok(account)
 }
+/// A cached identity is not proof that Blizzard still accepts the cookies.
+pub fn check_account_session(region: &str, helper: &Path) -> Result<Option<Account>, String> {
+    let bytes = match run_login_start(helper, region, None, None, true) {
+        Ok(bytes) => bytes,
+        Err(error) if error == "SESSION_EXPIRED" => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let account: Account =
+        serde_json::from_slice(&bytes).map_err(|_| "Could not verify the saved session.")?;
+    account.validate()?;
+    Ok(Some(account))
+}
+// Tickets are opaque and provide no supported refresh-token endpoint. Bound
+// reuse locally; renewal uses the existing browser cookies and official flow.
+fn authorization_stamp(game: &Game, account: &Account) -> Result<PathBuf, String> {
+    let identity = format!(
+        "{}|{}|{}|{}",
+        game.prefix,
+        crate::catalog::product(&game.product_code)?.auth_code,
+        game.region,
+        account.account_id
+    );
+    Ok(session_dir()?.join(format!("authorization-{:x}", md5::compute(identity))))
+}
+fn authorization_recent(path: &Path) -> bool {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|time| time.elapsed().ok())
+        .is_some_and(|age| age < Duration::from_secs(24 * 3600))
+}
 pub fn authorize_game(game: &Game, account: &Account, helper: &Path) -> Result<(), String> {
     if matches!(game.product_code.as_str(), "W1R" | "W2R") {
         account.validate()?;
@@ -592,7 +630,9 @@ pub fn authorize_game(game: &Game, account: &Account, helper: &Path) -> Result<(
         "probe-account\n{}\n{}\n{}",
         account.account_id, game.region, game.locale
     );
-    if exchange(game, &mode, None).is_ok() {
+    if authorization_recent(&authorization_stamp(game, account)?)
+        && exchange(game, &mode, None).is_ok()
+    {
         return Ok(());
     }
     refresh_game_authorization(game, account, helper)
@@ -616,7 +656,16 @@ pub fn refresh_game_authorization(
     if ticket.account_id() != account.account_id {
         return Err("Game authorization belongs to a different Battle.net account. Sign in again before launching.".into());
     }
-    store(game, ticket)
+    store(game, ticket)?;
+    let path = authorization_stamp(game, account)?;
+    let mut stamp = File::options()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|_| "Authorization saved, but its renewal time could not be recorded.")?;
+    stamp.write_all(b"renewed\n").map_err(|e| e.to_string())
 }
 pub fn sign_out_account(game: &Game) -> Result<(), String> {
     let directory = directories::ProjectDirs::from("", "", "battlenet-linux-launcher")
@@ -989,7 +1038,7 @@ pub fn chat_ticket(region: &str, account: &Account, start: &str) -> Result<Ticke
     if start.len() > 8192 {
         return Err("Invalid chat challenge".into());
     }
-    let bytes = run_login_start(&helper, region, Some("app"), Some(start))?;
+    let bytes = run_login_start(&helper, region, Some("app"), Some(start), false)?;
     let ticket =
         Ticket::parse(std::str::from_utf8(&bytes).map_err(|_| "Invalid chat authorization.")?)?;
     if ticket.account_id() != account.account_id {
@@ -1000,4 +1049,25 @@ pub fn chat_ticket(region: &str, account: &Account, start: &str) -> Result<Ticke
 
 pub fn uses_proton(game: &Game) -> bool {
     game.runtime_kind == "proton" || (game.runtime_kind == "auto" && !game.proton.is_empty())
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+    #[test]
+    fn ticket_reuse_requires_a_recent_non_future_renewal() {
+        let path = std::env::temp_dir().join(format!("bnet-renewal-test-{}", std::process::id()));
+        let _ = fs::remove_file(&path);
+        assert!(!authorization_recent(&path));
+        let file = File::create(&path).unwrap();
+        assert!(authorization_recent(&path));
+        let now = std::time::SystemTime::now();
+        file.set_times(fs::FileTimes::new().set_modified(now - Duration::from_secs(86401)))
+            .unwrap();
+        assert!(!authorization_recent(&path));
+        file.set_times(fs::FileTimes::new().set_modified(now + Duration::from_secs(3600)))
+            .unwrap();
+        assert!(!authorization_recent(&path));
+        fs::remove_file(path).unwrap();
+    }
 }

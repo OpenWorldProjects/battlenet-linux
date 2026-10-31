@@ -34,7 +34,7 @@ class Redirect(http.server.BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", "session=verified; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax")
             self.end_headers()
             return
-        if self.path == "/account":
+        if self.path in ["/account", "/login-expired"]:
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
@@ -91,6 +91,17 @@ with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Redirect) as server:
             assert result.returncode==0,(result.returncode,result.stderr.decode(errors="replace"))
             assert json.loads(result.stdout)["account_id"]=="12345"
             print("PASS: private browser session reused after closing the login helper")
+            result=subprocess.run([str(helper),"EU","--test-account","--check-session","--session-dir",directory],env=account_env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=25)
+            assert result.returncode==0,(result.returncode,result.stderr.decode(errors="replace"))
+            assert json.loads(result.stdout)["account_id"]=="12345"
+            assert b"window_opened" not in result.stderr, "Session check opened a window"
+            print("PASS: valid persisted session verified without opening a login window")
+            expired_env={**account_env,"BNET_TEST_LOGIN_URL":f"http://127.0.0.1:{server.server_port}/login-expired"}
+            result=subprocess.run([str(helper),"EU","--test-account","--check-session","--session-dir",directory],env=expired_env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=25)
+            assert result.returncode==4,(result.returncode,result.stderr.decode(errors="replace"))
+            assert result.stdout==b"" and b"window_opened" not in result.stderr
+            print("PASS: expired login redirect reported separately, without showing a window or returning an identity")
+
         denied_env={**env,"BNET_TEST_LOGIN_URL":f"http://127.0.0.1:{server.server_port}/account"}
         process=subprocess.Popen([str(helper),"EU","--test-account"],env=denied_env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         try:
