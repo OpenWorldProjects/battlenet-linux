@@ -25,31 +25,45 @@ impl Controller {
         let available = Arc::new(AtomicBool::new(false));
         let active = available.clone();
         std::thread::spawn(move || {
-            let icon = image::load_from_memory(include_bytes!("../assets/battlenet-icon.png"))
-                .expect("bundled tray icon")
-                .to_rgba8();
-            let width = icon.width() as i32;
-            let height = icon.height() as i32;
-            let data = icon
-                .pixels()
-                .flat_map(|p| [p[3], p[0], p[1], p[2]])
+            let source = image::load_from_memory(include_bytes!("../assets/battlenet-icon.png"))
+                .expect("bundled tray icon");
+            // SNI hosts choose a suitable pixmap. Use network-order ARGB and
+            // avoid a theme name that is unavailable outside the Flatpak.
+            let icons = [16, 22, 24, 32, 48]
+                .into_iter()
+                .map(|size| {
+                    let icon = source
+                        .resize_exact(size, size, image::imageops::FilterType::Lanczos3)
+                        .to_rgba8();
+                    ksni::Icon {
+                        width: size as i32,
+                        height: size as i32,
+                        data: icon
+                            .pixels()
+                            .flat_map(|p| [p[3], p[0], p[1], p[2]])
+                            .collect(),
+                    }
+                })
                 .collect();
+            let failure_tx = tx.clone();
+            let failure_context = context.clone();
             let tray = Item {
                 tx,
                 context,
                 available: active,
-                icon: ksni::Icon {
-                    width,
-                    height,
-                    data,
-                },
+                icons,
             };
             let builder = tray
                 .assume_sni_available(true)
                 .disable_dbus_name(std::env::var_os("FLATPAK_ID").is_some());
-            if let Ok(_handle) = builder.spawn() {
-                loop {
+            match builder.spawn() {
+                Ok(_handle) => loop {
                     std::thread::park();
+                },
+                Err(_) => {
+                    eprintln!("Could not register the system tray item.");
+                    let _ = failure_tx.send(Action::Unavailable);
+                    failure_context.request_repaint();
                 }
             }
         });
@@ -60,7 +74,7 @@ struct Item {
     tx: Sender<Action>,
     context: egui::Context,
     available: Arc<AtomicBool>,
-    icon: ksni::Icon,
+    icons: Vec<ksni::Icon>,
 }
 impl Item {
     fn send(&self, action: Action) {
@@ -75,11 +89,8 @@ impl ksni::Tray for Item {
     fn title(&self) -> String {
         "Battle.net Linux".into()
     }
-    fn icon_name(&self) -> String {
-        "battlenet-linux".into()
-    }
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        vec![self.icon.clone()]
+        self.icons.clone()
     }
     fn activate(&mut self, _: i32, _: i32) {
         self.send(Action::Show);
