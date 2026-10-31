@@ -1,0 +1,10 @@
+#!/bin/sh
+# Forward only launcher-owned runtime settings; use the host session environment
+# for display, drivers, Python, desktop schemas, and user runtime discovery.
+set -eu
+for name in WINEPREFIX WINEDEBUG WINEESYNC WINEFSYNC PROTONPATH PROTON_VERB GAMEID STEAM_COMPAT_INSTALL_PATH BNET_BRIDGE_PORT BNET_BRIDGE_NONCE WEBKIT_DISABLE_DMABUF_RENDERER WINE_SIMULATE_WRITECOPY; do
+    if value=$(printenv "$name"); then
+        set -- "--env=$name=$value" "$@"
+    fi
+done
+exec /usr/bin/flatpak-spawn --host "$@"

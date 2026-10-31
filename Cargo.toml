@@ -1,0 +1,26 @@
+[package]
+name = "battlenet-linux-launcher"
+version = "0.1.0"
+edition = "2024"
+description = "Unofficial native Linux launcher for Blizzard games"
+
+[dependencies]
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "persistence"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "6"
+ksni = { version = "0.3.6", features = ["blocking"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "1"
+md5 = "0.8"
+flate2 = "1"
+url = "2"
+zeroize = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+image = { version = "0.25", default-features = false, features = ["png", "webp", "jpeg"] }
+# Keep proper Wayland title-bar controls when eframe defaults are disabled.
+winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita"] }
+
+[profile.release]
+lto = "thin"
+strip = true

@@ -1,0 +1,15 @@
+/target/
+/bridge/target/
+/login-helper/target/
+/launcher.local.json
+
+/dist/
+/.agents/
+/.codex/
+/.aws/
+/docs/*.png
+*.log
+core
+core.*
+.env
+.env.*

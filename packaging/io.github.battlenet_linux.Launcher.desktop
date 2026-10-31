@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Battle.net Linux
+Comment=Launch and update Blizzard games
+Exec=battlenet-linux-launcher
+Icon=io.github.battlenet_linux.Launcher
+Categories=Game;
+Terminal=false
+StartupWMClass=Battle.net Linux
