@@ -164,7 +164,7 @@ fn prepare_view(
         );
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
         window.set_title("Battle.net · Complete sign-in");
-        window.set_default_size(480, 760);
+        window.set_default_size(480, 620);
         window.add(&popup);
         window.show_all();
         let weak = window.downgrade();
@@ -263,6 +263,70 @@ fn read_account(
             }
         },
     );
+}
+// WebKit's SQLite store excludes session-only cookies. Preserve those after
+// successful sign-in for a bounded day, retaining their security attributes.
+// Blizzard still decides whether any cookie is valid; this grants no access.
+fn retain_session_cookies(context: &webkit2gtk::WebContext, fixture: bool) {
+    let Some(manager) = context.cookie_manager() else {
+        return;
+    };
+    let Ok(expiry) = gtk::glib::DateTime::now_utc().and_then(|now| now.add_days(1)) else {
+        return;
+    };
+    let mut origins = vec![
+        "https://account.battle.net/".to_owned(),
+        "https://eu.account.battle.net/login/".into(),
+        "https://us.account.battle.net/login/".into(),
+        "https://kr.account.battle.net/login/".into(),
+        "https://eu.battle.net/login/".into(),
+        "https://us.battle.net/login/".into(),
+        "https://kr.battle.net/login/".into(),
+        "https://account.battlenet.com.cn/login/".into(),
+    ];
+    if fixture {
+        if let Ok(url) = std::env::var("BNET_TEST_LOGIN_URL") {
+            origins.push(url);
+        }
+    }
+    let waiting = Rc::new(Cell::new(origins.len()));
+    let event_loop = gtk::glib::MainLoop::new(None, false);
+    for origin in origins {
+        let waiting = waiting.clone();
+        let done = event_loop.clone();
+        let writer = manager.clone();
+        let expiry = expiry.clone();
+        manager.cookies(&origin, None::<&gtk::gio::Cancellable>, move |result| {
+            if let Ok(cookies) = result {
+                for mut cookie in cookies {
+                    if cookie.expires().is_none() {
+                        cookie.set_expires(&expiry);
+                        waiting.set(waiting.get() + 1);
+                        let pending = waiting.clone();
+                        let done = done.clone();
+                        writer.add_cookie(&mut cookie, None::<&gtk::gio::Cancellable>, move |_| {
+                            pending.set(pending.get() - 1);
+                            if pending.get() == 0 {
+                                done.quit();
+                            }
+                        });
+                    }
+                }
+            }
+            waiting.set(waiting.get() - 1);
+            if waiting.get() == 0 {
+                done.quit();
+            }
+        });
+    }
+    let timeout_loop = event_loop.clone();
+    let timeout = gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+        timeout_loop.quit()
+    });
+    event_loop.run();
+    if waiting.get() == 0 {
+        timeout.remove();
+    }
 }
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--protocol-version") {
@@ -461,7 +525,7 @@ fn main() {
     } else {
         "Battle.net · Authorize game"
     });
-    window.set_default_size(480, 760);
+    window.set_default_size(480, if chat_mode { 620 } else { 760 });
     window.set_position(gtk::WindowPosition::Center);
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
     layout.style_context().add_class("bnet-login-content");
@@ -572,6 +636,17 @@ fn main() {
             }
         });
         gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(20), finish_window);
+    } else if chat_mode && !args.iter().any(|a| a == "--startup-check") {
+        // Give the shared session time to return a ticket without flashing a
+        // second window. Show the official login only if interaction is needed.
+        let pending = ticket.clone();
+        let login_window = window.clone();
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(4), move || {
+            if pending.borrow().is_none() {
+                login_window.show_all();
+                eprintln!("BNET_EVENT=window_opened");
+            }
+        });
     } else {
         window.show_all();
         eprintln!("BNET_EVENT=window_opened");
@@ -597,6 +672,13 @@ fn main() {
         web.load_uri(&start);
     }
     gtk::main();
+    if !startup_check
+        && !check_session
+        && argument("--session-dir").is_some()
+        && (account.borrow().is_some() || ticket.borrow().is_some())
+    {
+        retain_session_cookies(&context, fixture);
+    }
     if startup_check {
         println!("ready");
         return;

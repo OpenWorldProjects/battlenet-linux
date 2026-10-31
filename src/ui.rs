@@ -190,82 +190,90 @@ impl Launcher {
     fn game_sidebar(&mut self, ui: &mut egui::Ui, rect: Rect) {
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_width(rect.width());
-            ui.label(
-                RichText::new("CHATS AND FRIENDS")
-                    .font(bold(12.0))
-                    .color(MUTED),
-            );
-            ui.add_space(12.0);
-            if self.chat.connection.is_some() {
-                ui.horizontal(|ui| {
-                    ui.label(if self.chat.connected {
-                        "Connected"
+            ui.label(RichText::new("FRIENDS").font(bold(12.0)).color(MUTED));
+            ui.add_space(14.0);
+            ui.horizontal(|ui| {
+                let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 16.0), Sense::hover());
+                ui.painter().circle_filled(
+                    dot.center(),
+                    3.0,
+                    if self.chat.connected {
+                        Color32::from_rgb(112, 198, 76)
                     } else {
+                        MUTED
+                    },
+                );
+                ui.label(
+                    RichText::new(if self.chat.connected {
+                        "Connected"
+                    } else if self.chat.connection.is_some() {
                         "Connecting…"
-                    });
-                    if ui.small_button("Disconnect").clicked() {
-                        self.chat_paused = true;
-                        self.chat.disconnect();
+                    } else {
+                        "Disconnected"
+                    })
+                    .size(12.0)
+                    .color(MUTED),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.chat.connection.is_some() {
+                        if ui
+                            .small_button("•••")
+                            .on_hover_text("Chat options")
+                            .clicked()
+                        {
+                            self.chat.open = true;
+                        }
+                    } else if self.signed_in_this_session
+                        && self.pending.is_none()
+                        && ui.small_button("Connect").clicked()
+                    {
+                        if let Some(account) = self.account.clone() {
+                            self.chat_paused = false;
+                            self.chat.status = "Connecting…".into();
+                            self.chat.connection = Some(chat::Connection::start(
+                                self.game.region.clone(),
+                                account,
+                                ui.ctx().clone(),
+                            ));
+                        }
                     }
                 });
-            } else if ui
-                .add_enabled(
-                    self.signed_in_this_session && self.pending.is_none(),
-                    egui::Button::new("Connect to chat").fill(BLUE),
-                )
-                .clicked()
-            {
-                if let Some(account) = self.account.clone() {
-                    self.chat_paused = false;
-                    self.chat.status = "Connecting…".into();
-                    self.chat.connection = Some(chat::Connection::start(
-                        self.game.region.clone(),
-                        account,
-                        ui.ctx().clone(),
-                    ));
-                }
-            }
-            if !self.chat.status.is_empty() {
-                ui.add(
-                    egui::Label::new(RichText::new(&self.chat.status).size(12.0).color(
-                        if self.chat.error {
-                            Color32::from_rgb(240, 145, 132)
-                        } else {
-                            MUTED
-                        },
-                    ))
-                    .wrap(),
-                );
-            }
-            if self.account.is_none() {
-                settings_note(ui, "Sign in to connect to Battle.net chat.");
-            }
+            });
             ui.add_space(12.0);
-            ui.separator();
             let search_id = egui::Id::new("friend-search");
             let mut search = ui
                 .ctx()
                 .data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
-            if !self.chat.contacts.is_empty() {
-                ui.add_space(10.0);
-                ui.add_sized(
-                    [rect.width(), 30.0],
-                    egui::TextEdit::singleline(&mut search)
-                        .hint_text("Find a friend")
-                        .char_limit(100),
-                );
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(format!("Friends · {}", self.chat.contacts.len()))
-                        .size(12.0)
-                        .color(MUTED),
-                );
-            }
+            ui.add_sized(
+                [rect.width(), 32.0],
+                egui::TextEdit::singleline(&mut search)
+                    .hint_text("Search friends")
+                    .char_limit(100),
+            );
             ui.ctx()
                 .data_mut(|d| d.insert_temp(search_id, search.clone()));
+            ui.add_space(14.0);
+            let selected = self
+                .chat
+                .selected
+                .and_then(|id| self.chat.contacts.iter().find(|f| f.id == id))
+                .cloned();
+            if !self.chat.contacts.is_empty() {
+                ui.label(
+                    RichText::new(format!("Friends · {}", self.chat.contacts.len()))
+                        .size(11.0)
+                        .color(MUTED),
+                );
+                ui.add_space(6.0);
+            }
+            let list_height = if selected.is_some() {
+                150.0
+            } else {
+                (rect.bottom() - ui.cursor().top() - 100.0).max(90.0)
+            };
             egui::ScrollArea::vertical()
                 .id_salt("sidebar-contacts")
-                .max_height(190.0)
+                .max_height(list_height)
                 .show(ui, |ui| {
                     for contact in self
                         .chat
@@ -273,15 +281,51 @@ impl Launcher {
                         .iter()
                         .filter(|f| f.name.to_lowercase().contains(&search.to_lowercase()))
                     {
-                        if ui
-                            .add_sized(
-                                [rect.width(), 38.0],
-                                egui::Button::new(
-                                    RichText::new(&contact.name)
-                                        .color(Color32::from_rgb(173, 211, 244)),
-                                )
-                                .selected(self.chat.selected == Some(contact.id)),
-                            )
+                        let (row, response) =
+                            ui.allocate_exact_size(egui::vec2(rect.width(), 48.0), Sense::click());
+                        let active = self.chat.selected == Some(contact.id);
+                        if active || response.hovered() {
+                            ui.painter().rect_filled(
+                                row,
+                                4,
+                                if active {
+                                    Color32::from_rgb(35, 49, 66)
+                                } else {
+                                    PANEL
+                                },
+                            );
+                        }
+                        let center = row.left_center() + egui::vec2(22.0, 0.0);
+                        ui.painter()
+                            .circle_filled(center, 16.0, Color32::from_rgb(41, 55, 75));
+                        let initial = contact
+                            .name
+                            .chars()
+                            .next()
+                            .unwrap_or('?')
+                            .to_uppercase()
+                            .to_string();
+                        ui.painter().text(
+                            center,
+                            Align2::CENTER_CENTER,
+                            initial,
+                            bold(15.0),
+                            Color32::from_rgb(173, 211, 244),
+                        );
+                        let name = ui.painter().layout_no_wrap(
+                            contact.name.clone(),
+                            bold(12.0),
+                            Color32::from_rgb(173, 211, 244),
+                        );
+                        let text_rect = Rect::from_min_max(
+                            row.min + egui::vec2(47.0, 15.0),
+                            row.max - egui::vec2(6.0, 0.0),
+                        );
+                        ui.painter()
+                            .with_clip_rect(text_rect.intersect(ui.clip_rect()))
+                            .galley(text_rect.min, name, WHITE);
+                        if response
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
                             .clicked()
                         {
                             self.chat.selected = Some(contact.id);
@@ -289,90 +333,135 @@ impl Launcher {
                         }
                     }
                 });
-            if let Some(friend) = self
-                .chat
-                .selected
-                .and_then(|id| self.chat.contacts.iter().find(|f| f.id == id))
-                .cloned()
-            {
-                ui.add_space(12.0);
+            if self.chat.contacts.is_empty() {
+                ui.add_space(18.0);
+                ui.label(
+                    RichText::new(if self.chat.connection.is_some() {
+                        "Loading your friends…"
+                    } else if self.signed_in_this_session {
+                        "Your friends will appear here when chat connects."
+                    } else {
+                        "Sign in to see your friends."
+                    })
+                    .size(12.0)
+                    .color(MUTED),
+                );
+            }
+            if self.chat.error {
+                ui.add_space(10.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&self.chat.status)
+                            .size(12.0)
+                            .color(Color32::from_rgb(240, 145, 132)),
+                    )
+                    .wrap(),
+                );
+            }
+            if let Some(friend) = selected {
+                ui.add_space(10.0);
                 ui.separator();
-                ui.label(RichText::new(&friend.name).strong());
-                let height = (rect.bottom() - ui.cursor().top() - 175.0).max(100.0);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&friend.name).strong().color(WHITE));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button("×")
+                            .on_hover_text("Close conversation")
+                            .clicked()
+                        {
+                            self.chat.selected = None;
+                        }
+                    });
+                });
+                let height = (rect.bottom() - ui.cursor().top() - 115.0).max(70.0);
                 egui::ScrollArea::vertical()
                     .id_salt(("sidebar-messages", friend.id.high, friend.id.low))
                     .stick_to_bottom(true)
                     .max_height(height)
                     .min_scrolled_height(height)
                     .show(ui, |ui| {
-                        ui.set_max_width(rect.width() - 12.0);
+                        ui.set_width(rect.width() - 10.0);
                         for message in self.chat.messages.iter().filter(|m| m.peer == friend.id) {
-                            ui.label(
-                                RichText::new(if message.outgoing {
-                                    "You"
+                            egui::Frame::new()
+                                .fill(if message.outgoing {
+                                    Color32::from_rgb(28, 62, 94)
                                 } else {
-                                    &message.name
+                                    PANEL
                                 })
-                                .size(11.0)
-                                .color(MUTED),
-                            );
-                            ui.add(egui::Label::new(&message.text).wrap());
-                            ui.add_space(8.0);
+                                .corner_radius(6)
+                                .inner_margin(9)
+                                .show(ui, |ui| {
+                                    ui.set_max_width(rect.width() - 32.0);
+                                    ui.label(
+                                        RichText::new(if message.outgoing {
+                                            "You"
+                                        } else {
+                                            &message.name
+                                        })
+                                        .size(10.0)
+                                        .color(MUTED),
+                                    );
+                                    ui.add(
+                                        egui::Label::new(RichText::new(&message.text).size(13.0))
+                                            .wrap(),
+                                    );
+                                });
+                            ui.add_space(5.0);
                         }
                     });
+                ui.add_space(6.0);
                 ui.add_enabled_ui(self.chat.connected, |ui| {
-                    let edit = ui.add_sized(
-                        [rect.width(), 34.0],
-                        egui::TextEdit::singleline(&mut self.chat.draft)
-                            .hint_text("Write a message…")
-                            .char_limit(4096),
-                    );
-                    let send = ui.button("Send").clicked()
-                        || edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if send && !self.chat.draft.trim().is_empty() {
-                        if self.chat.draft.len() > 4096 {
-                            self.chat.status = "Message is too long.".into();
-                        } else if let Some(connection) = &self.chat.connection {
-                            if connection
-                                .commands
-                                .send(chat::Command::Send(friend.clone(), self.chat.draft.clone()))
-                                .is_ok()
-                            {
-                                self.chat.draft.clear();
-                                self.chat.status = "Sending…".into();
-                                edit.request_focus();
+                    ui.horizontal(|ui| {
+                        let edit = ui.add_sized(
+                            [rect.width() - 65.0, 34.0],
+                            egui::TextEdit::singleline(&mut self.chat.draft)
+                                .hint_text("Message…")
+                                .char_limit(4096),
+                        );
+                        let send = ui
+                            .add_sized([55.0, 34.0], egui::Button::new("Send"))
+                            .clicked()
+                            || (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                        if send
+                            && !self.chat.draft.trim().is_empty()
+                            && self.chat.draft.len() <= 4096
+                        {
+                            if let Some(connection) = &self.chat.connection {
+                                if connection
+                                    .commands
+                                    .send(chat::Command::Send(
+                                        friend.clone(),
+                                        self.chat.draft.clone(),
+                                    ))
+                                    .is_ok()
+                                {
+                                    self.chat.draft.clear();
+                                    edit.request_focus();
+                                }
                             }
                         }
-                    }
+                    });
                 });
-            } else {
-                ui.add_space(20.0);
-                settings_note(
-                    ui,
-                    if self.chat.connected {
-                        "Choose a contact to start a conversation."
-                    } else {
-                        "Your friends and conversations will appear here."
-                    },
-                );
-            }
-            ui.add_space(14.0);
-            if self.chat.selected.is_some()
-                && ui
-                    .add_sized([rect.width(), 32.0], egui::Button::new("Open conversation"))
-                    .clicked()
-            {
-                self.chat.open = true;
             }
             if !self.session_note.is_empty() {
-                ui.add_space(12.0);
-                settings_note(ui, &self.session_note);
+                ui.add_space(10.0);
+                ui.label(RichText::new(&self.session_note).size(11.0).color(MUTED));
             }
             if !self.signed_in_this_session
                 && self.account.is_some()
-                && ui.button("Sign in again").clicked()
+                && ui
+                    .add_enabled(self.pending.is_none(), egui::Button::new("Sign in again"))
+                    .clicked()
             {
                 self.login(ui.ctx());
+            }
+            let footer = Rect::from_min_size(
+                egui::pos2(rect.left(), rect.bottom() - 34.0),
+                egui::vec2(rect.width(), 34.0),
+            );
+            if action(ui, footer, "Chats and friends", false, true) {
+                self.chat.open = true;
             }
         });
     }

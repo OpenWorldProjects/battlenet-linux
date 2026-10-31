@@ -667,7 +667,7 @@ fn run(
                             auth_started = true;
                             deadline = Instant::now() + Duration::from_secs(300);
                             emit(Event::Status(
-                                "Confirm chat access in the Battle.net sign-in window…".into(),
+                                "Connecting with your saved Battle.net session…".into(),
                             ));
                             let (tx, rx) = mpsc::channel();
                             let challenge = Zeroizing::new(

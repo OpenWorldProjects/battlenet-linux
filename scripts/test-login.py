@@ -31,7 +31,7 @@ class Redirect(http.server.BaseHTTPRequestHandler):
         if self.path == "/account-start":
             self.send_response(302)
             self.send_header("Location", "/account")
-            self.send_header("Set-Cookie", "session=verified; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax")
+            self.send_header("Set-Cookie", "session=verified; Path=/; HttpOnly; SameSite=Lax")
             self.end_headers()
             return
         if self.path in ["/account", "/login-expired"]:
@@ -44,6 +44,14 @@ class Redirect(http.server.BaseHTTPRequestHandler):
             self.send_json({"battleTag":"FixtureUser#1234", "email":"never-export@example.invalid"})
             return
         token_url = "bnet-linux-login://callback/?ST=EU-00000000000000000000000000000000-12345"
+        if self.path == "/chat":
+            if "session=verified" in self.headers.get("Cookie", ""):
+                self.send_response(302)
+                self.send_header("Location", token_url)
+                self.end_headers()
+            else:
+                self.send_json({"error":"sign-in required"},401)
+            return
         pages = {
             "/script": f"<script>window.location.href={token_url!r}</script>",
             "/form": "<form method='post' action='/finish'></form><script>document.forms[0].submit()</script>",
@@ -90,7 +98,13 @@ with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Redirect) as server:
             result=subprocess.run([str(helper),"EU","--test-account","--session-dir",directory],env=account_env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20)
             assert result.returncode==0,(result.returncode,result.stderr.decode(errors="replace"))
             assert json.loads(result.stdout)["account_id"]=="12345"
-            print("PASS: private browser session reused after closing the login helper")
+            print("PASS: session-only authentication cookie retained across login-helper restarts")
+            chat_env={**account_env,"BNET_TEST_LOGIN_URL":f"http://127.0.0.1:{server.server_port}/chat"}
+            result=subprocess.run([str(helper),"EU","--game","app","--test-redirect","--session-dir",directory],env=chat_env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20)
+            assert result.returncode==0,(result.returncode,result.stderr.decode(errors="replace"))
+            assert result.stdout==b"EU-00000000000000000000000000000000-12345"
+            assert b"window_opened" not in result.stderr,"Cached chat authorization flashed a login window"
+            print("PASS: chat reuses account session cookies and returns automatically without a second visible sign-in")
             result=subprocess.run([str(helper),"EU","--test-account","--check-session","--session-dir",directory],env=account_env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=25)
             assert result.returncode==0,(result.returncode,result.stderr.decode(errors="replace"))
             assert json.loads(result.stdout)["account_id"]=="12345"
