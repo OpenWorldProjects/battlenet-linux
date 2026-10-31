@@ -33,6 +33,7 @@ pub struct Message {
 pub enum Event {
     Status(String),
     Connected,
+    AccountVerified(Account),
     Friend(Friend),
     Removed(Entity),
     Received(Message),
@@ -50,6 +51,12 @@ pub struct Connection {
 }
 impl Connection {
     pub fn start(region: String, account: Account, ctx: eframe::egui::Context) -> Self {
+        Self::start_account(region, Some(account), ctx)
+    }
+    pub fn login(region: String, ctx: eframe::egui::Context) -> Self {
+        Self::start_account(region, None, ctx)
+    }
+    fn start_account(region: String, account: Option<Account>, ctx: eframe::egui::Context) -> Self {
         let (commands, rx) = mpsc::channel();
         let (tx, events) = mpsc::channel();
         std::thread::spawn(move || {
@@ -67,7 +74,7 @@ impl Connection {
                 let _ = tx.send(event);
                 ctx.request_repaint();
             };
-            if let Err(error) = run(&region, &account, rx, &emit) {
+            if let Err(error) = run(&region, account.as_ref(), rx, &emit) {
                 emit(Event::Failed(error));
             }
             emit(Event::Disconnected);
@@ -79,6 +86,7 @@ impl Connection {
 pub struct State {
     pub connection: Option<Connection>,
     pub connected: bool,
+    pub verified_account: Option<Account>,
     pub error: bool,
     pub status: String,
     pub contacts: Vec<Friend>,
@@ -94,6 +102,7 @@ impl State {
             let _ = c.commands.send(Command::Disconnect);
         }
         self.connected = false;
+        self.verified_account = None;
         self.error = false;
         self.contacts.clear();
         self.messages.clear();
@@ -114,6 +123,7 @@ impl State {
                     self.status = s;
                     self.error = false;
                 }
+                Event::AccountVerified(account) => self.verified_account = Some(account),
                 Event::Connected => {
                     self.connected = true;
                     self.error = false;
@@ -373,13 +383,31 @@ impl Wire {
         self.packet(service, method, token, body)
     }
 }
+fn verified_profile(id: Entity, expected: Option<&Account>) -> Result<Account> {
+    if id.low == 0 {
+        return Err("Chat did not return an account identity".into());
+    }
+    let account_id = id.low.to_string();
+    if expected.is_some_and(|account| account.account_id != account_id) {
+        return Err("Chat returned a different Battle.net account".into());
+    }
+    let account = Account {
+        account_id,
+        battle_tag: expected.and_then(|account| account.battle_tag.clone()),
+    };
+    account.validate()?;
+    Ok(account)
+}
+
 fn run(
     region: &str,
-    account: &Account,
+    account: Option<&Account>,
     commands: Receiver<Command>,
     emit: &impl Fn(Event),
 ) -> Result<()> {
-    account.validate()?;
+    if let Some(account) = account {
+        account.validate()?;
+    }
     let prefix = match region {
         "EU" => "eu",
         "KR" => "kr",
@@ -443,6 +471,7 @@ fn run(
     let mut services = [0u32; 4];
     let mut input = Vec::new();
     let mut connected = false;
+    let mut own_account: Option<(Entity, Account)> = None;
     let mut auth: Option<Receiver<Result<crate::auth::Ticket>>> = None;
     let mut auth_started = false;
     let mut deadline = Instant::now() + Duration::from_secs(45);
@@ -630,7 +659,14 @@ fn run(
                             if num(key, 1)? == 0x424e && num(key, 2)? == 1 && num(key, 3)? == 4 {
                                 let name = text(blob(field.data, 2)?, 5)?;
                                 if !name.is_empty() {
-                                    emit(Event::Friend(Friend { id, name }));
+                                    if let Some((_, profile)) =
+                                        own_account.as_mut().filter(|(own_id, _)| *own_id == id)
+                                    {
+                                        profile.battle_tag = Some(name);
+                                        emit(Event::AccountVerified(profile.clone()));
+                                    } else {
+                                        emit(Event::Friend(Friend { id, name }));
+                                    }
                                 }
                             }
                         }
@@ -647,9 +683,10 @@ fn run(
                             return Err(format!("Chat login was rejected (code {error})"));
                         }
                         let id = entity(blob(&body, 2)?)?;
-                        if id.low.to_string() != account.account_id {
-                            return Err("Chat returned a different Battle.net account".into());
-                        }
+                        let verified = verified_profile(id, account)?;
+                        own_account = Some((id, verified.clone()));
+                        emit(Event::AccountVerified(verified));
+                        names.push_front(id);
                         connected = true;
                         emit(Event::Connected);
                         let mut request = Vec::new();
@@ -675,10 +712,14 @@ fn run(
                                     .map_err(|_| "Invalid chat challenge")?
                                     .to_owned(),
                             );
-                            let account = account.clone();
+                            let account = account.cloned();
                             let region = region.to_owned();
                             std::thread::spawn(move || {
-                                let _ = tx.send(runner::chat_ticket(&region, &account, &challenge));
+                                let _ = tx.send(runner::chat_ticket(
+                                    &region,
+                                    account.as_ref(),
+                                    &challenge,
+                                ));
                             });
                             auth = Some(rx);
                         }
@@ -740,4 +781,49 @@ fn text_name(body: &[u8]) -> Result<String> {
     } else {
         s
     })
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    #[test]
+    fn initial_login_accepts_only_a_nonzero_server_account() {
+        assert!(verified_profile(Entity { high: 1, low: 0 }, None).is_err());
+        let profile = verified_profile(
+            Entity {
+                high: 1,
+                low: 12345,
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(profile.account_id, "12345");
+        assert!(profile.battle_tag.is_none());
+    }
+    #[test]
+    fn reconnection_cannot_switch_the_remembered_account() {
+        let expected = Account {
+            account_id: "12345".into(),
+            battle_tag: Some("Example#1234".into()),
+        };
+        assert!(
+            verified_profile(
+                Entity {
+                    high: 1,
+                    low: 98765
+                },
+                Some(&expected)
+            )
+            .is_err()
+        );
+        let profile = verified_profile(
+            Entity {
+                high: 1,
+                low: 12345,
+            },
+            Some(&expected),
+        )
+        .unwrap();
+        assert_eq!(profile.battle_tag, expected.battle_tag);
+    }
 }

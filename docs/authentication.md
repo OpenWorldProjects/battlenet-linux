@@ -1,4 +1,13 @@
-# Authentication and SC2 launch
+# Account and game authentication
+
+For EU, US and KR, the main sign-in now authenticates the native Battle.net chat connection first. Blizzard supplies the managed browser challenge; after completing that single sign-in, the chat service returns a verified account ID, which becomes the launcher account. The library and friends use that same authenticated connection. Own-account presence resolves the BattleTag. Reconnection checks the returned ID against the remembered account and rejects a different identity. The website-account flow remains available for CN, where native chat is not supported.
+
+Startup restores the remembered identity and connects chat directly with the saved browser session. Website-profile verification is no longer a prerequisite for chat or game actions. When automatic chat is disabled or paused, optional website checks use a separate background job, so they cannot put Play into its busy state. Reauthentication clears the old chat error state and starts a new shared connection. Network connectivity failures are not treated as proof of cookie expiry.
+
+The first chat/authentication handoff below is covered by synthetic cookie and identity checks; a noninteractive live check did not complete with the saved session, so interactive Blizzard sign-in and real message delivery still need confirmation. No chat messages were sent by diagnostics.
+
+## Earlier implementation and storage details
+
 
 The launcher signs in to the Battle.net account independently of games through the official account website in the native WebKit helper. The account endpoint verifies the authenticated session and returns only the numeric account ID and optional BattleTag. Passwords, MFA, cookies, and callback tickets are not printed in diagnostics.
 

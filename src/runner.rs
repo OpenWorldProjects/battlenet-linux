@@ -572,7 +572,7 @@ pub fn remembered_account() -> Option<Account> {
     account.validate().ok()?;
     Some(account)
 }
-fn remember_account(account: &Account) -> Result<(), String> {
+pub(crate) fn remember_account(account: &Account) -> Result<(), String> {
     account.validate()?;
     let directory = session_dir()?;
     let path = directory.join("account.json");
@@ -1046,8 +1046,10 @@ pub fn open_url(url: &str) -> Result<(), String> {
     }
 }
 
-pub fn chat_ticket(region: &str, account: &Account, start: &str) -> Result<Ticket, String> {
-    account.validate()?;
+pub fn chat_ticket(region: &str, account: Option<&Account>, start: &str) -> Result<Ticket, String> {
+    if let Some(account) = account {
+        account.validate()?;
+    }
     let helper = login_helper().ok_or("Battle.net sign-in component is missing.")?;
     if start.len() > 8192 {
         return Err("Invalid chat challenge".into());
@@ -1055,7 +1057,7 @@ pub fn chat_ticket(region: &str, account: &Account, start: &str) -> Result<Ticke
     let bytes = run_login_start(&helper, region, Some("app"), Some(start), false)?;
     let ticket =
         Ticket::parse(std::str::from_utf8(&bytes).map_err(|_| "Invalid chat authorization.")?)?;
-    if ticket.account_id() != account.account_id {
+    if account.is_some_and(|account| ticket.account_id() != account.account_id) {
         return Err("Chat authorization belongs to a different account.".into());
     }
     Ok(ticket)

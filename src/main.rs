@@ -21,7 +21,6 @@ const BLUE: Color32 = Color32::from_rgb(0, 120, 240);
 
 enum Completed {
     Login(Result<auth::Account, String>),
-    Session(Result<Option<auth::Account>, String>),
     Probe(Result<(), String>),
     Authorization(Result<(), String>),
     Update(Result<(), String>),
@@ -76,6 +75,7 @@ struct Launcher {
     existing_game: bool,
     next_process_check: Instant,
     pending: Option<Receiver<Completed>>,
+    session_check: Option<(String, Receiver<Result<Option<auth::Account>, String>>)>,
     status: String,
     version_check: Option<Receiver<(String, Result<updates::Status, String>)>>,
     version_status: Option<updates::Status>,
@@ -94,6 +94,7 @@ struct Launcher {
     log: String,
     signed_in_this_session: bool,
     session_verified: bool,
+    login_via_chat: bool,
     next_session_check: Instant,
     session_note: String,
     account: Option<auth::Account>,
@@ -288,6 +289,7 @@ impl Launcher {
             existing_game: false,
             next_process_check: Instant::now(),
             pending: None,
+            session_check: None,
             status: String::new(),
             version_check: None,
             version_status: None,
@@ -306,6 +308,7 @@ impl Launcher {
             log: String::new(),
             signed_in_this_session: has_account,
             session_verified: false,
+            login_via_chat: false,
             next_session_check: Instant::now() + Duration::from_secs(3),
             session_note: String::new(),
             account: remembered,
@@ -405,7 +408,11 @@ impl Launcher {
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(460.0, 760.0)));
     }
     fn choose_path(&mut self, kind: discovery::Pick) {
-        if self.pending.is_some() || self.selected_running() {
+        if self.pending.is_some()
+            || self.login_via_chat
+            || self.session_check.is_some()
+            || self.selected_running()
+        {
             return;
         }
         let current = match kind {
@@ -480,12 +487,95 @@ impl Launcher {
             let _ = tx.send((key, updates::check(&game)));
         });
     }
+    fn apply_session_result(&mut self, result: Result<Option<auth::Account>, String>) {
+        match result {
+            Ok(Some(account))
+                if self
+                    .account
+                    .as_ref()
+                    .is_some_and(|old| old.account_id == account.account_id) =>
+            {
+                self.account = Some(account);
+                self.session_verified = true;
+                self.signed_in_this_session = true;
+                self.session_note.clear();
+            }
+            Ok(_) => {
+                self.session_verified = false;
+                self.signed_in_this_session = false;
+                self.chat.disconnect();
+                self.session_note = "Session expired. Sign in again to reconnect.".into();
+                self.status = self.session_note.clone();
+            }
+            Err(_) => {
+                self.session_verified = false;
+                self.session_note = "Session could not be checked. Retry sign-in if needed.".into();
+                self.next_session_check = Instant::now() + Duration::from_secs(300);
+            }
+        }
+    }
     fn poll(&mut self, ctx: &egui::Context) {
         self.chat.poll();
+        if let Some(mut account) = self.chat.verified_account.take() {
+            if account.battle_tag.is_none() {
+                account.battle_tag = self
+                    .account
+                    .as_ref()
+                    .filter(|old| old.account_id == account.account_id)
+                    .and_then(|old| old.battle_tag.clone());
+            }
+            let remembered = runner::remember_account(&account);
+            self.account = Some(account);
+            self.signed_in_this_session = true;
+            self.session_verified = true;
+            self.session_note.clear();
+            if self.login_via_chat {
+                self.login_via_chat = false;
+                self.status = "Signed in to Battle.net.".into();
+                if !self.library {
+                    self.enter_library(ctx);
+                }
+            }
+            if let Err(error) = remembered {
+                self.status = error;
+            }
+        }
+        if self.login_via_chat && (self.chat.error || self.chat.connection.is_none()) {
+            self.login_via_chat = false;
+            self.status = self.chat.status.clone();
+        }
+        if self.chat.connected && self.account.is_some() {
+            // Chat validates the returned account ID before emitting Connected.
+            self.session_verified = true;
+            self.signed_in_this_session = true;
+            self.session_note.clear();
+        }
+        let checked = self
+            .session_check
+            .as_ref()
+            .and_then(|(id, rx)| match rx.try_recv() {
+                Ok(result) => Some((id.clone(), result)),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    Some((id.clone(), Err("Session check stopped.".into())))
+                }
+                Err(mpsc::TryRecvError::Empty) => None,
+            });
+        if let Some((expected, result)) = checked {
+            self.session_check = None;
+            if self
+                .account
+                .as_ref()
+                .is_some_and(|account| account.account_id == expected)
+                && !self.chat.connected
+            {
+                self.apply_session_result(result);
+            }
+        }
         ctx.request_repaint_after(Duration::from_secs(30));
         if self.auto_chat
             && !self.chat_paused
-            && self.session_verified
+            && self.signed_in_this_session
+            && self.session_check.is_none()
             && self.pending.is_none()
             && self.chat.connection.is_none()
             && !self.chat.error
@@ -501,21 +591,28 @@ impl Launcher {
                 ));
             }
         }
+        // With automatic chat enabled, its authenticated connection verifies the
+        // session directly. Do not first gate it on the account website.
         if self.account.is_some()
+            && self.session_check.is_none()
             && self.pending.is_none()
-            && (self.chat.connection.is_none() || self.chat.connected)
+            && self.chat.connection.is_none()
+            && (!self.auto_chat || self.chat_paused)
             && Instant::now() >= self.next_session_check
         {
             self.next_session_check = Instant::now() + Duration::from_secs(3600);
-            if let Some(helper) = runner::login_helper() {
+            if let (Some(helper), Some(account)) = (runner::login_helper(), self.account.as_ref()) {
                 self.session_note = "Checking saved session…".into();
                 let region = self.game.region.clone();
-                self.job(move || {
-                    Completed::Session(runner::check_account_session(&region, &helper))
+                let id = account.account_id.clone();
+                let (tx, rx) = mpsc::channel();
+                self.session_check = Some((id, rx));
+                std::thread::spawn(move || {
+                    let _ = tx.send(runner::check_account_session(&region, &helper));
                 });
             }
         }
-        if self.account.is_none() && self.chat.connection.is_some() {
+        if !self.login_via_chat && self.account.is_none() && self.chat.connection.is_some() {
             self.chat.disconnect();
         }
         if let Some(rx) = &self.browser_job {
@@ -653,29 +750,10 @@ impl Launcher {
                             }
 
 
-                        Completed::Session(result) => {
-                            match result {
-                                Ok(Some(account)) if self.account.as_ref().is_some_and(|old| old.account_id == account.account_id) => {
-                                    self.account = Some(account);
-                                    self.session_verified = true;
-                                    self.signed_in_this_session = true;
-                                    self.session_note.clear();
-                                }
-                                Ok(_) => {
-                                    self.session_verified = false;
-                                    self.signed_in_this_session = false;
-                                    self.chat.disconnect();
-                                    self.session_note = "Session expired. Sign in again to reconnect.".into();
-                                    self.status = self.session_note.clone();
-                                }
-                                Err(_) => {
-                                    self.session_verified = false;
-                                    self.session_note = "Session could not be checked. Retry sign-in if needed.".into();
-                                    self.next_session_check = Instant::now() + Duration::from_secs(300);
-                                }
-                            }
-                        }
                         Completed::Login(Ok(account)) => {
+                            self.chat.disconnect();
+                            self.next_chat_connect = Instant::now();
+                            self.session_check = None;
                             self.session_verified = true;
                             self.chat_paused = false;
                             self.session_note.clear();
@@ -697,6 +775,8 @@ impl Launcher {
                             self.status = "Saved game authorization is readable.".into();
                         }
                         Completed::Logout(Ok(())) => {
+                            self.chat.disconnect();
+                            self.session_check = None;
                             self.session_verified = false;
                             self.session_note.clear();
                             self.account = None;
@@ -776,12 +856,16 @@ impl Launcher {
                 }
             }
         }
-        if self.pending.is_some() || self.selected_running() {
+        if self.pending.is_some()
+            || self.login_via_chat
+            || self.session_check.is_some()
+            || self.selected_running()
+        {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
     }
-    fn login(&mut self, _ctx: &egui::Context) {
-        if self.pending.is_some() {
+    fn login(&mut self, ctx: &egui::Context) {
+        if self.pending.is_some() || self.login_via_chat {
             return;
         }
         let Some(helper) = runner::login_helper() else {
@@ -791,8 +875,17 @@ impl Launcher {
             return;
         };
         let region = self.game.region.clone();
-        self.status = "Opening Battle.net sign-in…".into();
-        self.job(move || Completed::Login(runner::login_account(&region, &helper)));
+        if region == "CN" {
+            self.status = "Opening Battle.net sign-in…".into();
+            self.job(move || Completed::Login(runner::login_account(&region, &helper)));
+            return;
+        }
+        self.chat.disconnect();
+        self.chat_paused = false;
+        self.session_check = None;
+        self.login_via_chat = true;
+        self.status = "Signing in to Battle.net…".into();
+        self.chat.connection = Some(chat::Connection::login(region, ctx.clone()));
     }
     fn play(&mut self, ctx: &egui::Context) {
         if self
@@ -941,6 +1034,39 @@ fn shade(p: &egui::Painter, r: Rect) {
     p.add(egui::Shape::mesh(mesh));
 }
 fn main() -> eframe::Result {
+    if cfg!(debug_assertions) && std::env::args().any(|arg| arg == "--check-chat") {
+        let Some(account) = runner::remembered_account() else {
+            eprintln!("No saved account for chat check.");
+            std::process::exit(2);
+        };
+        let connection = chat::Connection::start("EU".into(), account, egui::Context::default());
+        let deadline = Instant::now() + Duration::from_secs(40);
+        let mut connected_at = None;
+        let mut contacts = 0;
+        while Instant::now() < deadline {
+            match connection.events.recv_timeout(Duration::from_millis(250)) {
+                Ok(chat::Event::Status(status)) => println!("{status}"),
+                Ok(chat::Event::Connected) => {
+                    connected_at = Some(Instant::now());
+                    println!("Chat account authenticated.");
+                }
+                Ok(chat::Event::Friend(_)) => contacts += 1,
+                Ok(chat::Event::Failed(error)) => {
+                    eprintln!("Chat check failed: {error}");
+                    std::process::exit(1);
+                }
+                _ => {}
+            }
+            if connected_at.is_some_and(|time| time.elapsed() > Duration::from_secs(3)) {
+                let _ = connection.commands.send(chat::Command::Disconnect);
+                println!("Friend records received: {contacts}. No messages sent.");
+                return Ok(());
+            }
+        }
+        let _ = connection.commands.send(chat::Command::Disconnect);
+        eprintln!("Chat check timed out before authentication completed.");
+        std::process::exit(1);
+    }
     let mut profile = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {

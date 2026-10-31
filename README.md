@@ -16,7 +16,7 @@ sh scripts/run.sh
 
 The run script builds the launcher and its required sign-in component together. GTK 3 and WebKitGTK 4.1 development packages are needed for the sign-in component. The egui launcher uses OpenGL with Wayland and X11 support; it does not link GTK/WebKit itself.
 
-Account sign-in opens Blizzard's account website in the managed login window, verifies the signed-in account through its account API, and returns automatically to the library. It does not require any game installation or Wine prefix. There is no callback field or URL-copying step. The login window supports retries and related sign-in popups. If it cannot complete sign-in, Play remains locked and the user can retry.
+Account sign-in opens Blizzard’s managed login challenge for the native chat connection. The chat server verifies the account, then the launcher opens the library with that connection already authenticated (EU/US/KR). It does not require any game installation or Wine prefix. There is no callback field or URL-copying step. The login window supports retries and related sign-in popups. If it cannot complete sign-in, Play remains locked and the user can retry.
 
 Check the installed game against Blizzard's current manifest with `cargo run --locked -- --profile launcher.local.json --check-updates`.
 

@@ -521,7 +521,7 @@ fn main() {
     window.set_title(if account_mode {
         "Battle.net · Log in"
     } else if chat_mode {
-        "Battle.net · Authorize chat"
+        "Battle.net · Log in"
     } else {
         "Battle.net · Authorize game"
     });
@@ -532,7 +532,7 @@ fn main() {
     let address = gtk::Label::new(Some(if account_mode {
         "Secure sign-in · account.battle.net"
     } else if chat_mode {
-        "Battle.net · Chat authorization"
+        "Signing in to Battle.net…"
     } else {
         "Battle.net · Game authorization"
     }));

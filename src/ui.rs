@@ -746,9 +746,9 @@ impl Launcher {
                                 settings_note(ui,"Game authorization is managed separately for each title. Passwords are entered only on Blizzard's sign-in page.");
                                 ui.add_space(12.0);
                                 settings_note(ui,if self.session_verified {"Session verified with Battle.net."}else if self.session_note.is_empty(){"Saved account. Session will be checked with Battle.net."}else{&self.session_note});
-                                if ui.add_enabled(self.pending.is_none(),egui::Button::new("Renew sign-in")).clicked(){self.login(ctx);}
+                                if ui.add_enabled(self.pending.is_none()&&!self.login_via_chat,egui::Button::new("Renew sign-in")).clicked(){self.login(ctx);}
                                 ui.add_space(16.0);
-                                if ui.add_enabled(self.pending.is_none(),egui::Button::new("Sign out")).clicked(){let game=self.game.clone();self.job(move||Completed::Logout(runner::sign_out_account(&game)));self.app_settings=false;}
+                                if ui.add_enabled(self.pending.is_none()&&!self.login_via_chat,egui::Button::new("Sign out")).clicked(){let game=self.game.clone();self.job(move||Completed::Logout(runner::sign_out_account(&game)));self.app_settings=false;}
                             }
                         }
                     });
@@ -1003,13 +1003,13 @@ impl Launcher {
                 if action(
                     ui,
                     r,
-                    if self.pending.is_some() {
+                    if self.pending.is_some() || self.login_via_chat {
                         "Signing in…"
                     } else {
                         "Log in with Battle.net"
                     },
                     true,
-                    self.pending.is_none(),
+                    self.pending.is_none() && !self.login_via_chat,
                 ) {
                     self.login(ui.ctx());
                 }
@@ -1019,7 +1019,7 @@ impl Launcher {
                         .size(12.0)
                         .color(MUTED),
                 );
-                if self.pending.is_some() {
+                if self.pending.is_some() || self.login_via_chat {
                     ui.add_space(16.0);
                     ui.spinner();
                 }
