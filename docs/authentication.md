@@ -19,3 +19,7 @@ Synthetic WebKit tests cover cookie reuse, hidden validation, explicit expiratio
 ## Desktop compatibility
 
 Login diagnostics use fixed lifecycle events and process status only. A desktop check reproduced a pre-page GTK abort caused by inherited VS Code Snap schema paths. Child processes discard those editor overrides while retaining normal system and Flatpak data directories. The default Wayland startup check then passed. `--check-login-window` exercises the same environment without visiting a website or accessing an account.
+
+## Packaged browser font initialization
+
+A blank chat authorization window was reproduced inside the GNOME Flatpak runtime with an empty browser session. The WebKit content process consumed a CPU core in fontconfig before emitting its first navigation event; the host helper loaded the same public login URL. An isolated font configuration resolved the runtime failure: navigation started, redirected, committed, and finished, without disabling sandboxing or graphics acceleration. The package installs this configuration for login-helper children only. Desktop font settings and cookies are preserved. Login diagnostics record fixed page lifecycle events, never URLs. Slow loading and renderer termination now produce a visible status instead of leaving only a blank window.

@@ -84,10 +84,19 @@ pub(crate) fn system_environment(command: &mut Command) {
         command.env("XDG_DATA_DIRS", system_data_dirs(&value));
     }
 }
+fn login_environment(command: &mut Command) {
+    system_environment(command);
+    // The runtime's inherited font rules can spin WebKit before the first
+    // navigation. Isolate only the packaged login helper's font configuration.
+    if std::env::var_os("FLATPAK_ID").is_some() {
+        command.env("FONTCONFIG_FILE", "/app/share/bnet-login/fonts.conf");
+        command.env_remove("FONTCONFIG_PATH");
+    }
+}
 pub fn check_login_window() -> Result<(), String> {
     let helper = login_helper().ok_or("The login component is missing.")?;
     let mut command = Command::new(helper);
-    system_environment(&mut command);
+    login_environment(&mut command);
     let output = command
         .args(["EU", "--startup-check"])
         .env("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
@@ -399,7 +408,7 @@ fn run_login_start(
 ) -> Result<Zeroizing<Vec<u8>>, String> {
     use std::os::unix::process::ExitStatusExt;
     let mut version_command = Command::new(helper);
-    system_environment(&mut version_command);
+    login_environment(&mut version_command);
     let version = version_command
         .arg("--protocol-version")
         .output()
@@ -443,7 +452,7 @@ fn run_login_start(
         }
     );
     drop(pending);
-    system_environment(&mut cmd);
+    login_environment(&mut cmd);
     cmd.env_remove("GIO_MODULE_DIR")
         .env_remove("GTK_PATH")
         .env_remove("GTK_MODULES")
@@ -476,6 +485,11 @@ fn run_login_start(
     let stderr = Zeroizing::new(output.stderr);
     let known = [
         "window_opened",
+        "page_started",
+        "page_redirected",
+        "page_committed",
+        "page_finished",
+        "page_timeout",
         "window_closed",
         "cancelled",
         "display_failed",

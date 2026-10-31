@@ -81,6 +81,15 @@ fn prepare_view(
     let game_mode = account.is_none();
     let origin_label = message.clone();
     web.connect_load_changed(move |web, event| {
+        eprintln!(
+            "BNET_EVENT={}",
+            match event {
+                webkit2gtk::LoadEvent::Started => "page_started",
+                webkit2gtk::LoadEvent::Redirected => "page_redirected",
+                webkit2gtk::LoadEvent::Committed => "page_committed",
+                _ => "page_finished",
+            }
+        );
         if event == webkit2gtk::LoadEvent::Started {
             if let Some(uri) = web.uri() {
                 if let Ok(url) = url::Url::parse(&uri) {
@@ -491,7 +500,19 @@ fn main() {
         fixture,
         check_session,
     );
-    web.connect_web_process_terminated(|_, _| eprintln!("BNET_EVENT=web_process_terminated"));
+    let crash_status = address.clone();
+    web.connect_web_process_terminated(move |_, _| {
+        eprintln!("BNET_EVENT=web_process_terminated");
+        crash_status.set_text("The sign-in browser stopped. Choose Retry to reconnect.");
+    });
+    let slow_status = address.clone();
+    let slow_web = web.clone();
+    gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(25), move || {
+        if slow_web.is_loading() || slow_web.uri().is_none() {
+            eprintln!("BNET_EVENT=page_timeout");
+            slow_status.set_text("Sign-in is taking too long. Check your connection, then Retry.");
+        }
+    });
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     controls.style_context().add_class("bnet-login-controls");
     controls.set_margin_start(12);
