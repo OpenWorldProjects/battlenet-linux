@@ -187,6 +187,48 @@ pub(super) fn setup(ctx: &egui::Context) {
     ctx.set_global_style(style);
 }
 impl Launcher {
+    pub(super) fn close_confirmation(&mut self, ctx: &egui::Context) {
+        let response = egui::Modal::new(egui::Id::new("close-launcher-choice"))
+            .frame(settings_frame())
+            .show(ctx, |ui| {
+                ui.set_width(420.0_f32.min(ctx.content_rect().width() - 48.0));
+                ui.label(
+                    RichText::new("Close Battle.net?")
+                        .font(bold(22.0))
+                        .color(WHITE),
+                );
+                ui.add_space(12.0);
+                ui.label("Keep the launcher running in the background, or quit the application.");
+                ui.add_space(16.0);
+                ui.checkbox(&mut self.remember_close_choice, "Remember my choice");
+                ui.add_space(18.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        self.close_prompt = false;
+                    }
+                    if ui
+                        .button(if self.tray.available() {
+                            "Minimize to tray"
+                        } else {
+                            "Minimize window"
+                        })
+                        .clicked()
+                    {
+                        self.close_to_tray = true;
+                        self.close_choice_remembered = self.remember_close_choice;
+                        self.minimize_launcher(ctx);
+                    }
+                    if ui.button(RichText::new("Quit").strong()).clicked() {
+                        self.close_to_tray = false;
+                        self.close_choice_remembered = self.remember_close_choice;
+                        self.quit_launcher(ctx);
+                    }
+                });
+            });
+        if response.should_close() {
+            self.close_prompt = false;
+        }
+    }
     fn game_sidebar(&mut self, ui: &mut egui::Ui, rect: Rect) {
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_width(rect.width());
@@ -739,10 +781,17 @@ impl Launcher {
                         match page {
                             0=>{
                                 settings_section(ui,"Window behavior","Choose what happens when you close the launcher.");
-                                ui.add_enabled_ui(self.tray.available(),|ui|{ui.checkbox(&mut self.close_to_tray,"Keep running in the system tray");});
+                                ui.radio_value(&mut self.close_choice_remembered,false,"Ask every time");
+                                ui.radio_value(&mut self.close_choice_remembered,true,"Use my chosen action");
+                                if self.close_choice_remembered {
+                                    ui.indent("remembered-close-action",|ui|{
+                                        ui.radio_value(&mut self.close_to_tray,true,"Minimize launcher");
+                                        ui.radio_value(&mut self.close_to_tray,false,"Quit launcher");
+                                    });
+                                }
                                 ui.add_space(12.0);
                                 ui.checkbox(&mut self.auto_chat,"Connect to chat after sign-in");
-                                settings_note(ui,if self.tray.available(){"Use the tray menu to reopen or quit the launcher. Games keep running when the launcher closes."}else{"Your desktop is not currently providing a system tray. Closing the window will quit the launcher."});
+                                settings_note(ui,if self.tray.available(){"Use the tray menu to reopen or quit the launcher. Games keep running when the launcher closes."}else{"Your desktop has no system tray. Minimize keeps the launcher in the taskbar."});
                             }
                             1=>{
                                 settings_section(ui,"Interface size","Adjust text and controls for your display.");
@@ -758,7 +807,7 @@ impl Launcher {
                                 settings_note(ui,"Game authorization is managed separately for each title. Passwords are entered only on Blizzard's sign-in page.");
                                 ui.add_space(12.0);
                                 if let Some(refreshed)=self.chat.last_renewed {ui.label(RichText::new(format!("Session refreshed {} minutes ago",refreshed.elapsed().as_secs()/60)).size(12.0).color(MUTED));}
-                                settings_note(ui,if self.session_verified {"Session verified with Battle.net."}else if self.session_note.is_empty(){"Saved account. Reconnect to verify your Battle.net session."}else{&self.session_note});
+                                settings_note(ui,if self.session_verified {"Session verified with Battle.net."}else if self.session_note.is_empty(){"Reconnect to verify your Battle.net session."}else{&self.session_note});
                                 if ui.add_enabled(self.pending.is_none()&&!self.login_via_chat,egui::Button::new("Renew sign-in")).clicked(){self.login(ctx);}
                                 ui.add_space(16.0);
                                 if ui.add_enabled(self.pending.is_none()&&!self.login_via_chat,egui::Button::new("Sign out")).clicked(){let game=self.game.clone();self.job(move||Completed::Logout(runner::sign_out_account(&game)));self.app_settings=false;}
@@ -1145,12 +1194,16 @@ impl Launcher {
             type_at(
                 &p,
                 avatar.right_top() + egui::vec2(12.0, 21.0),
-                if self.session_verified {
-                    "Signed in"
+                if self.chat.connected {
+                    "Online"
+                } else if self.chat.authorizing {
+                    "Signing in…"
+                } else if self.chat.connection.is_some() {
+                    "Connecting…"
                 } else if self.signed_in_this_session {
-                    "Saved account"
+                    "Offline"
                 } else {
-                    "Sign in required"
+                    "Sign-in required"
                 },
                 11.0,
                 MUTED,

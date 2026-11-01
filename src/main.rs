@@ -65,6 +65,9 @@ struct Launcher {
     children: Vec<(runner::Game, Child)>,
     tray: tray::Controller,
     close_to_tray: bool,
+    close_choice_remembered: bool,
+    remember_close_choice: bool,
+    close_prompt: bool,
     sidebar_open: bool,
     auto_chat: bool,
     chat_paused: bool,
@@ -283,6 +286,12 @@ impl Launcher {
                 .is_none_or(|s| s != "false"),
             chat_paused: false,
             next_chat_connect: Instant::now(),
+            close_choice_remembered: cc
+                .storage
+                .and_then(|s| s.get_string("close-choice-remembered"))
+                .is_some_and(|s| s == "true"),
+            remember_close_choice: false,
+            close_prompt: false,
             force_quit: false,
             browser_job: None,
             chat: chat::State::default(),
@@ -506,6 +515,22 @@ impl Launcher {
             let _ = tx.send((key, updates::check(&game)));
         });
     }
+    fn minimize_launcher(&mut self, ctx: &egui::Context) {
+        self.close_prompt = false;
+        if self.tray.available() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+    }
+    fn quit_launcher(&mut self, ctx: &egui::Context) {
+        self.close_prompt = false;
+        if let Some(cancel) = &self.patch_cancel {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.force_quit = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
     fn apply_session_result(&mut self, result: Result<Option<auth::Account>, String>) {
         // Website cookies do not determine validity of the native chat account.
         // The website flow is only the fallback for the unsupported CN service.
@@ -673,13 +698,18 @@ impl Launcher {
                 }
             }
         }
-        if ctx.input(|input| input.viewport().close_requested())
-            && self.close_to_tray
-            && self.tray.available()
-            && !self.force_quit
-        {
+        if ctx.input(|input| input.viewport().close_requested()) && !self.force_quit {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            if self.close_choice_remembered {
+                if self.close_to_tray {
+                    self.minimize_launcher(ctx);
+                } else {
+                    self.quit_launcher(ctx);
+                }
+            } else {
+                self.close_prompt = true;
+                self.remember_close_choice = false;
+            }
         }
 
         if Instant::now() >= self.next_process_check {
@@ -960,6 +990,10 @@ impl Launcher {
 impl eframe::App for Launcher {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string("close-to-tray", self.close_to_tray.to_string());
+        storage.set_string(
+            "close-choice-remembered",
+            self.close_choice_remembered.to_string(),
+        );
         storage.set_string("sidebar-open", self.sidebar_open.to_string());
         storage.set_string("auto-chat", self.auto_chat.to_string());
         if let Some(current) = self
@@ -1015,6 +1049,9 @@ impl eframe::App for Launcher {
                             .interactive(false),
                     );
                 });
+        }
+        if self.close_prompt {
+            self.close_confirmation(ui.ctx());
         }
     }
 }
