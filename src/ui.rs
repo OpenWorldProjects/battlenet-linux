@@ -1144,6 +1144,77 @@ impl Launcher {
                 false,
             );
         }
+        let account_rect = Rect::from_min_max(
+            avatar.left_top() - egui::vec2(6.0, 6.0),
+            egui::pos2(b.right() - 12.0, avatar.bottom() + 6.0),
+        );
+        let account_button = ui
+            .interact(
+                account_rect,
+                egui::Id::new("account-menu-button"),
+                Sense::click(),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Account menu");
+        if self.sidebar_open {
+            let center = egui::pos2(b.right() - 23.0, avatar.center().y);
+            p.line_segment(
+                [
+                    center + egui::vec2(-3.0, -2.0),
+                    center + egui::vec2(0.0, 2.0),
+                ],
+                Stroke::new(1.3, MUTED),
+            );
+            p.line_segment(
+                [
+                    center + egui::vec2(0.0, 2.0),
+                    center + egui::vec2(3.0, -2.0),
+                ],
+                Stroke::new(1.3, MUTED),
+            );
+        }
+        egui::Popup::menu(&account_button).show(|ui| {
+            ui.set_min_width(190.0);
+            if ui.button("Account settings").clicked() {
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(egui::Id::new("launcher-preferences-page"), 2_usize)
+                });
+                self.app_settings = true;
+                self.settings = false;
+                ui.close();
+            }
+            if self.account.is_some() {
+                if ui
+                    .add_enabled(
+                        self.pending.is_none() && !self.login_via_chat,
+                        egui::Button::new("Sign out"),
+                    )
+                    .clicked()
+                {
+                    let game = self.game.clone();
+                    self.job(move || Completed::Logout(runner::sign_out_account(&game)));
+                    ui.close();
+                }
+            } else if ui
+                .add_enabled(
+                    self.pending.is_none() && !self.login_via_chat,
+                    egui::Button::new("Sign in"),
+                )
+                .clicked()
+            {
+                self.login(ui.ctx());
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Quit launcher").clicked() {
+                if let Some(cancel) = &self.patch_cancel {
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                self.force_quit = true;
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                ui.close();
+            }
+        });
         let rail = Rect::from_min_max(
             b.min + egui::vec2(24.0, 83.0),
             egui::pos2(split - 24.0, b.top() + 141.0),

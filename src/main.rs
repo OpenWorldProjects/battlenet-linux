@@ -320,6 +320,15 @@ impl Launcher {
             app.enter_library(ctx);
         }
         if cfg!(debug_assertions) {
+            if std::env::args().any(|arg| arg == "--preview-account-menu") {
+                app.auto_chat = false;
+                app.account = Some(auth::Account {
+                    account_id: "12345".into(),
+                    battle_tag: Some("PreviewAccount#1234".into()),
+                });
+                app.signed_in_this_session = true;
+                app.select_game("W3");
+            }
             if std::env::args().any(|arg| arg == "--preview-paid-game") {
                 app.select_game("W3");
             }
