@@ -31,6 +31,7 @@ pub struct Message {
     pub outgoing: bool,
 }
 pub enum Event {
+    Avatar(Entity, u32),
     Status(String),
     Connected,
     AccountVerified(Account),
@@ -111,6 +112,7 @@ pub struct State {
     pub error: bool,
     pub status: String,
     pub contacts: Vec<Friend>,
+    pub avatars: HashMap<(u64, u64), u32>,
     pub messages: Vec<Message>,
     pub selected: Option<Entity>,
     pub draft: String,
@@ -129,6 +131,7 @@ impl State {
         self.last_renewed = None;
         self.error = false;
         self.contacts.clear();
+        self.avatars.clear();
         self.messages.clear();
         self.selected = None;
         self.draft.clear();
@@ -144,6 +147,9 @@ impl State {
         let needs_another_frame = events.len() == 128;
         for event in events {
             match event {
+                Event::Avatar(id, avatar) => {
+                    self.avatars.insert((id.high, id.low), avatar);
+                }
                 Event::Status(s) => {
                     self.status = s;
                     self.error = false;
@@ -537,6 +543,8 @@ fn run_connection(
     let mut deadline = Instant::now() + Duration::from_secs(45);
     let mut last_ping = Instant::now();
     let mut names = VecDeque::new();
+    let mut portraits = Vec::new();
+    let mut next_profile_refresh = Instant::now() + Duration::from_secs(300);
     loop {
         if cancelled.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(());
@@ -573,6 +581,14 @@ fn run_connection(
             }
             Err(mpsc::TryRecvError::Empty) => {}
         }
+        if connected && Instant::now() >= next_profile_refresh {
+            for id in &portraits {
+                if !names.contains(id) {
+                    names.push_back(*id);
+                }
+            }
+            next_profile_refresh = Instant::now() + Duration::from_secs(300);
+        }
         for _ in 0..8 {
             if wire.pending.len() >= 32 {
                 break;
@@ -580,6 +596,9 @@ fn run_connection(
             let Some(id) = names.pop_front() else {
                 break;
             };
+            if portraits.len() < 5001 && !portraits.contains(&id) {
+                portraits.push(id);
+            }
             let mut query = Vec::new();
             bytes(1, &encode_entity(id), &mut query);
             let mut key = Vec::new();
@@ -587,6 +606,11 @@ fn run_connection(
             number(2, 1, &mut key);
             number(3, 4, &mut key);
             bytes(2, &key, &mut query);
+            let mut avatar_key = Vec::new();
+            number(1, 0x424e, &mut avatar_key);
+            number(2, 1, &mut avatar_key);
+            number(3, 13, &mut avatar_key);
+            bytes(2, &avatar_key, &mut query);
             wire.request(services[3], 4, &query, Some(Pending::Presence(id)))?;
         }
         if let Some(rx) = &auth {
@@ -763,6 +787,9 @@ fn run_connection(
                     }
                     Some(Pending::Presence(id)) => {
                         for field in fields(&body)?.iter().filter(|f| f.id == 2) {
+                            if let Some(avatar) = presence_avatar(field.data) {
+                                emit(Event::Avatar(id, avatar));
+                            }
                             let key = blob(field.data, 1)?;
                             if num(key, 1)? == 0x424e && num(key, 2)? == 1 && num(key, 3)? == 4 {
                                 let name = text(blob(field.data, 2)?, 5)?;
@@ -857,6 +884,7 @@ fn run_connection(
                     }
                     (3, 2) => {
                         if let Ok(f) = friend(blob(&body, 1)?) {
+                            portraits.retain(|id| *id != f.id);
                             emit(Event::Removed(f.id));
                         }
                     }
@@ -1032,5 +1060,45 @@ mod connection_lifetime_tests {
             received.recv_timeout(Duration::from_millis(100)),
             Ok(Command::Disconnect)
         ));
+    }
+}
+
+// Account presence: BN / account group 1 / avatar field 13, uint Variant field 9.
+fn presence_avatar(field: &[u8]) -> Option<u32> {
+    let key = blob(field, 1).ok()?;
+    if num(key, 1).ok()? != 0x424e || num(key, 2).ok()? != 1 || num(key, 3).ok()? != 13 {
+        return None;
+    }
+    let variant = fields(blob(field, 2).ok()?).ok()?;
+    let value = variant.iter().find(|v| v.id == 9)?.value;
+    u32::try_from(value).ok().filter(|v| *v <= 1_000_000)
+}
+#[cfg(test)]
+mod avatar_tests {
+    use super::*;
+    fn field(group: u64, id: u64, variant: u32, value: u64) -> Vec<u8> {
+        let mut key = Vec::new();
+        number(1, 0x424e, &mut key);
+        number(2, group, &mut key);
+        number(3, id, &mut key);
+        let mut v = Vec::new();
+        number(variant, value, &mut v);
+        let mut f = Vec::new();
+        bytes(1, &key, &mut f);
+        bytes(2, &v, &mut f);
+        f
+    }
+    #[test]
+    fn avatar_requires_exact_key_and_unsigned_variant() {
+        assert_eq!(presence_avatar(&field(1, 13, 9, 324)), Some(324));
+        assert_eq!(presence_avatar(&field(1, 13, 9, 0)), Some(0));
+        for f in [
+            field(2, 13, 9, 324),
+            field(1, 4, 9, 324),
+            field(1, 13, 3, 324),
+            field(1, 13, 9, u64::MAX),
+        ] {
+            assert_eq!(presence_avatar(&f), None);
+        }
     }
 }

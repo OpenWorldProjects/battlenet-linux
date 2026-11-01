@@ -347,20 +347,31 @@ impl Launcher {
                         let center = row.left_center() + egui::vec2(22.0, 0.0);
                         ui.painter()
                             .circle_filled(center, 16.0, Color32::from_rgb(41, 55, 75));
-                        let initial = contact
-                            .name
-                            .chars()
-                            .next()
-                            .unwrap_or('?')
-                            .to_uppercase()
-                            .to_string();
-                        ui.painter().text(
-                            center,
-                            Align2::CENTER_CENTER,
-                            initial,
-                            bold(15.0),
-                            Color32::from_rgb(173, 211, 244),
-                        );
+                        let avatar_id = self
+                            .chat
+                            .avatars
+                            .get(&(contact.id.high, contact.id.low))
+                            .copied()
+                            .unwrap_or(1);
+                        if let Some(texture) = self.avatars.texture(ui.ctx(), avatar_id) {
+                            image(
+                                ui.painter(),
+                                &texture,
+                                Rect::from_center_size(center, egui::vec2(32.0, 32.0)),
+                            );
+                        } else {
+                            // Neutral silhouette while the real portrait loads.
+                            ui.painter()
+                                .circle_filled(center - egui::vec2(0.0, 4.0), 5.0, SUBTLE);
+                            ui.painter().rect_filled(
+                                Rect::from_center_size(
+                                    center + egui::vec2(0.0, 7.0),
+                                    egui::vec2(15.0, 8.0),
+                                ),
+                                4,
+                                SUBTLE,
+                            );
+                        }
                         let name = ui.painter().layout_no_wrap(
                             contact.name.clone(),
                             bold(12.0),
@@ -724,7 +735,15 @@ impl Launcher {
             ui.horizontal_top(|ui|{
                 ui.vertical(|ui|{ui.set_width(210.0);ui.label(RichText::new("CONTACTS").size(11.0).color(MUTED));ui.add_space(10.0);
                     egui::ScrollArea::vertical().id_salt("chat-contacts").max_height(height-38.0).show(ui,|ui|{
-                        for friend in &self.chat.contacts {let selected=self.chat.selected==Some(friend.id);if ui.add_sized([200.0,36.0],egui::Button::new(&friend.name).selected(selected)).clicked(){self.chat.selected=Some(friend.id);self.chat.unread=0;}}
+                        for friend in &self.chat.contacts {
+                            ui.horizontal(|ui| {
+                                let avatar = self.chat.avatars.get(&(friend.id.high, friend.id.low)).copied().unwrap_or(1);
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0,28.0), Sense::hover());
+                                if let Some(texture) = self.avatars.texture(ctx, avatar) { image(ui.painter(), &texture, rect); }
+                                let selected = self.chat.selected == Some(friend.id);
+                                if ui.add_sized([164.0,36.0],egui::Button::new(&friend.name).selected(selected)).clicked(){self.chat.selected=Some(friend.id);self.chat.unread=0;}
+                            });
+                        }
                         if self.chat.connected&&self.chat.contacts.is_empty(){settings_note(ui,"No contacts were returned by Battle.net.");}
                     });
                 });ui.separator();
@@ -1178,7 +1197,31 @@ impl Launcher {
             egui::vec2(36.0, 36.0),
         );
         p.circle_filled(avatar.center(), 18.0, Color32::from_rgb(35, 45, 60));
-        image(&p, &self.art.bnet, avatar.shrink(7.0));
+        let avatar_id = self
+            .account
+            .as_ref()
+            .and_then(|account| account.account_id.parse::<u64>().ok())
+            .and_then(|id| {
+                self.chat
+                    .avatars
+                    .iter()
+                    .find(|((_, low), _)| *low == id)
+                    .map(|(_, avatar)| *avatar)
+            })
+            .unwrap_or(1);
+        if let Some(texture) = self.avatars.texture(ui.ctx(), avatar_id) {
+            image(&p, &texture, avatar);
+        } else {
+            p.circle_filled(avatar.center() - egui::vec2(0.0, 4.0), 6.0, SUBTLE);
+            p.rect_filled(
+                Rect::from_center_size(
+                    avatar.center() + egui::vec2(0.0, 8.0),
+                    egui::vec2(18.0, 9.0),
+                ),
+                5,
+                SUBTLE,
+            );
+        }
         if self.sidebar_open {
             type_at(
                 &p,

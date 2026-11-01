@@ -1,4 +1,5 @@
 mod auth;
+mod avatars;
 mod catalog;
 mod chat;
 mod discovery;
@@ -77,6 +78,7 @@ struct Launcher {
     force_quit: bool,
     browser_job: Option<Receiver<Result<(), String>>>,
     chat: chat::State,
+    avatars: avatars::Cache,
     profiles: Vec<runner::Game>,
     existing_game: bool,
     next_process_check: Instant,
@@ -303,6 +305,7 @@ impl Launcher {
             force_quit: false,
             browser_job: None,
             chat: chat::State::default(),
+            avatars: avatars::Cache::default(),
             profiles,
             existing_game: false,
             next_process_check: Instant::now(),
@@ -351,6 +354,27 @@ impl Launcher {
                 });
                 app.signed_in_this_session = true;
                 app.select_game("W3");
+            }
+            if std::env::args().any(|arg| arg == "--preview-avatars") {
+                app.auto_chat = false;
+                app.account = Some(auth::Account {
+                    account_id: "12345".into(),
+                    battle_tag: Some("Preview#1234".into()),
+                });
+                app.chat.connected = true;
+                app.chat.friends_loaded = true;
+                app.chat.avatars.insert((1, 12345), 324);
+                for (index, avatar) in [37, 85, 145, 324].into_iter().enumerate() {
+                    let id = chat::Entity {
+                        high: 1,
+                        low: index as u64 + 100,
+                    };
+                    app.chat.contacts.push(chat::Friend {
+                        id,
+                        name: format!("Preview friend {}", index + 1),
+                    });
+                    app.chat.avatars.insert((id.high, id.low), avatar);
+                }
             }
             if std::env::args().any(|arg| arg == "--preview-paid-game") {
                 app.select_game("W3");

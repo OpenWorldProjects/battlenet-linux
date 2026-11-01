@@ -20,3 +20,5 @@ Official StarCraft II artwork retrieved from https://starcraft2.blizzard.com/en-
 - `game-icons/*.svg`: unmodified official Blizzard navigation icons from `https://forge.akamaized.net/icons/<filename>.svg`, discovered through `https://navbar.blizzard.com/static/v1/nav.js`. Matching PNGs are rendered at 96px for egui.
 - `heroes-logo.png`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/blt834ba90f64d3e3cf/6a9804768102311ee181e07a/logo.png (reference asset, not used as the compact icon).
 - `starcraft-logo.png`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/blt1ff010bc61d5b9eb/6aa1fbadf8f124a920bcba58/logo.png (reference asset, not used as the compact icon).
+
+- Account portraits are fetched at runtime from Blizzard's public `https://blzprofile.akamaized.net/static/avatar/account/<avatarId>.jpg` catalogue; the selected numeric ID comes from account presence, never from a guessed BattleTag mapping. Manifest: https://blzprofile.akamaized.net/static/avatar/account/index.json. Portraits remain Blizzard assets and are cached locally rather than bundled.
