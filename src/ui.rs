@@ -511,10 +511,17 @@ impl Launcher {
                 ui.add_space(6.0);
                 ui.add_enabled_ui(self.chat.connected, |ui| {
                     ui.horizontal(|ui| {
+                        let message_align = if self.chat.draft.is_empty() {
+                            egui::Align::Center
+                        } else {
+                            egui::Align::Min
+                        };
                         let edit = ui.add_sized(
                             [rect.width() - 65.0, 34.0],
                             egui::TextEdit::singleline(&mut self.chat.draft)
                                 .hint_text("Message…")
+                                .horizontal_align(message_align)
+                                .vertical_align(egui::Align::Center)
                                 .char_limit(4096),
                         );
                         let send = ui
@@ -777,7 +784,8 @@ impl Launcher {
                         });ui.add_space(12.0);
                         let enabled=self.chat.connected;
                         ui.add_enabled_ui(enabled,|ui|{ui.horizontal(|ui|{
-                            let edit=ui.add_sized([(width-90.0).max(140.0),36.0],egui::TextEdit::singleline(&mut self.chat.draft).hint_text("Write a message…").char_limit(4096));
+                            let message_align = if self.chat.draft.is_empty() { egui::Align::Center } else { egui::Align::Min };
+                            let edit=ui.add_sized([(width-90.0).max(140.0),36.0],egui::TextEdit::singleline(&mut self.chat.draft).hint_text("Write a message…").horizontal_align(message_align).vertical_align(egui::Align::Center).char_limit(4096));
                             let send=ui.add_enabled(!self.chat.draft.trim().is_empty(),egui::Button::new("Send").fill(BLUE)).clicked() || edit.lost_focus()&&ui.input(|i|i.key_pressed(egui::Key::Enter));
                             if send&&!self.chat.draft.trim().is_empty(){if self.chat.draft.len()>4096{self.chat.status="Message is too long (maximum 4096 UTF-8 bytes).".into();}else if let Some(connection)=&self.chat.connection{let body=self.chat.draft.clone();if connection.commands.send(chat::Command::Send(friend.clone(),body)).is_ok(){self.chat.draft.clear();self.chat.status="Sending message…".into();edit.request_focus();}else{self.chat.status="Chat connection closed.".into();}}}
                         });});
