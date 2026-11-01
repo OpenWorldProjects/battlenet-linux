@@ -295,3 +295,75 @@ mod tests {
         assert!(product("unknown").is_err());
     }
 }
+
+/// Product access rules are separate from an account's verified entitlements.
+/// The current client does not yet retrieve the latter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Access {
+    FreeBase,
+    ClassicWithPaidUpgrade,
+    TrialWithSubscription,
+    Subscription,
+    License,
+}
+impl Access {
+    pub fn requires_access_options(self) -> bool {
+        matches!(
+            self,
+            Self::TrialWithSubscription | Self::Subscription | Self::License
+        )
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FreeBase => "Free base game",
+            Self::ClassicWithPaidUpgrade => "Classic free · Remastered license required",
+            Self::TrialWithSubscription => "Free trial · Subscription for full access",
+            Self::Subscription => "Active subscription or game time required",
+            Self::License => "Game license required",
+        }
+    }
+    pub fn primary_action(self) -> &'static str {
+        match self {
+            Self::FreeBase => "INSTALL",
+            Self::ClassicWithPaidUpgrade => "INSTALL CLASSIC",
+            Self::TrialWithSubscription | Self::Subscription | Self::License => {
+                "VIEW ACCESS OPTIONS"
+            }
+        }
+    }
+    pub fn installation_label(self) -> &'static str {
+        if self.requires_access_options() {
+            "Install with existing access…"
+        } else if self == Self::ClassicWithPaidUpgrade {
+            "Install StarCraft Classic"
+        } else {
+            "Install game"
+        }
+    }
+}
+pub fn access(code: &str) -> Access {
+    match code {
+        "S2" | "Hero" | "Pro" | "WTCG" => Access::FreeBase,
+        "S1" => Access::ClassicWithPaidUpgrade,
+        "WoW" => Access::TrialWithSubscription,
+        "WoWC" | "WoWE" | "WoWA" => Access::Subscription,
+        _ => Access::License,
+    }
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+    #[test]
+    fn licensed_and_subscription_games_are_not_advertised_as_free_installs() {
+        for code in [
+            "W1R", "W2R", "W3", "D3", "Fen", "OSI", "WoWC", "WoWE", "WoWA",
+        ] {
+            assert!(access(code).requires_access_options(), "{code}");
+            assert_eq!(access(code).primary_action(), "VIEW ACCESS OPTIONS");
+        }
+        assert_eq!(access("S1"), Access::ClassicWithPaidUpgrade);
+        assert_eq!(access("WoW"), Access::TrialWithSubscription);
+        assert!(access("unknown-future-product").requires_access_options());
+    }
+}

@@ -320,6 +320,9 @@ impl Launcher {
             app.enter_library(ctx);
         }
         if cfg!(debug_assertions) {
+            if std::env::args().any(|arg| arg == "--preview-paid-game") {
+                app.select_game("W3");
+            }
             if std::env::args().any(|arg| arg == "--preview-starcraft") {
                 app.select_game("S1");
             }

@@ -629,14 +629,13 @@ impl Launcher {
                 }
                 let title = p.layout(product.name.into(), bold(15.0), WHITE, width - 28.0);
                 p.galley(card.min + egui::vec2(14.0, 160.0), title, WHITE);
-                type_at(
-                    p,
-                    card.min + egui::vec2(14.0, 207.0),
-                    "Explore in store ↗",
-                    12.0,
-                    ACCENT,
-                    false,
+                let requirement = p.layout(
+                    catalog::access(product.code).label().into(),
+                    FontId::proportional(11.0),
+                    MUTED,
+                    width - 28.0,
                 );
+                p.galley(card.min + egui::vec2(14.0, 205.0), requirement, MUTED);
                 if response.hovered() {
                     p.rect_stroke(card, 6, Stroke::new(1.0, ACCENT), StrokeKind::Inside);
                 }
@@ -784,6 +783,8 @@ impl Launcher {
                         ui.add_enabled_ui(!locked,|ui|match page {
                             0=>{
                                 settings_section(ui,"Installation","Choose the game folder, region, and language.");
+                                settings_note(ui,catalog::access(&self.game.product_code).label());
+                                if catalog::access(&self.game.product_code).requires_access_options(){settings_note(ui,"Ownership is not verified. You need an existing license, eligible trial, or active game time to play.");}
                                 let mut directory=catalog::target_root(&self.game).map(|p|p.to_string_lossy().into_owned()).unwrap_or_default();
                                 let(changed,browse)=path_field(ui,"Game folder",&mut directory,"/home/…/Games/…");
                                 if browse{self.choose_path(discovery::Pick::GameFolder);}
@@ -896,7 +897,7 @@ impl Launcher {
                 egui::Button::new(if installed {
                     "View game"
                 } else {
-                    "Install game"
+                    catalog::access(code).installation_label()
                 })
                 .frame(false),
             )
@@ -1301,6 +1302,7 @@ impl Launcher {
         rule(&p, footer.left_top(), footer.right_top());
         let play =
             Rect::from_min_size(footer.min + egui::vec2(24.0, 24.0), egui::vec2(202.0, 52.0));
+        let access = catalog::access(&self.game.product_code);
         let title = if self.patch_cancel.is_some() && self.patch_can_cancel {
             "CANCEL UPDATE"
         } else if self.pending.is_some() {
@@ -1314,7 +1316,7 @@ impl Launcher {
         {
             "UPDATE"
         } else if runner::install_root(&self.game).is_err() {
-            "INSTALL"
+            access.primary_action()
         } else if self.signed_in_this_session {
             "PLAY"
         } else {
@@ -1332,7 +1334,11 @@ impl Launcher {
                 cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 self.status = "Cancelling update…".into();
             } else if runner::install_root(&self.game).is_err() {
-                self.start_update();
+                if access.requires_access_options() {
+                    self.open_link(shop_link(&self.game.product_code));
+                } else {
+                    self.start_update();
+                }
             } else if self
                 .version_status
                 .as_ref()
@@ -1372,7 +1378,7 @@ impl Launcher {
             message.as_str()
         } else if self.status.is_empty() {
             if runner::install_root(&self.game).is_err() {
-                "Not installed · Choose Install to get started"
+                access.label()
             } else if self.signed_in_this_session {
                 "Ready to launch"
             } else {
@@ -1582,7 +1588,7 @@ impl Launcher {
             if runner::install_root(&self.game).is_ok() {
                 "Installed · Ready when you are"
             } else {
-                "Install directly from Blizzard's CDN"
+                catalog::access(&self.game.product_code).label()
             },
             14.0,
             MUTED,
@@ -1597,6 +1603,25 @@ impl Launcher {
         ui.add_space(12.0);
         ui.label(RichText::new(match self.game.product_code.as_str(){"S1"=>"The original StarCraft and Brood War campaigns, with Remastered features available to licensed accounts.","Hero"=>"Team up with friends and bring Blizzard's heroes to the Nexus.",_=>"Install, update, and launch with your configured Wine or Proton runtime."}).size(15.0).color(MUTED));
         ui.add_space(16.0);
+        let access = catalog::access(&self.game.product_code);
+        if access.requires_access_options() {
+            settings_note(ui, access.label());
+            settings_note(
+                ui,
+                "Account ownership has not been verified. Installing files does not grant game access.",
+            );
+            if runner::install_root(&self.game).is_err()
+                && ui
+                    .add_enabled(
+                        self.pending.is_none(),
+                        egui::Button::new("Install with existing access…"),
+                    )
+                    .clicked()
+            {
+                self.start_update();
+            }
+            ui.add_space(12.0);
+        }
         ui.horizontal(|ui| {
             if ui.button("Shop game ↗").clicked() {
                 self.tab = 2;
@@ -1671,17 +1696,21 @@ impl Launcher {
                 );
                 let title = p.layout(product.name.into(), bold(14.0), WHITE, width - 28.0);
                 p.galley(picture.left_bottom() + egui::vec2(14.0, 10.0), title, WHITE);
-                type_at(
-                    p,
-                    picture.left_bottom() + egui::vec2(14.0, 42.0),
-                    if installed {
-                        "Installed"
-                    } else {
-                        "Not installed"
-                    },
-                    12.0,
+                let label = if installed {
+                    "Installed"
+                } else {
+                    catalog::access(product.code).label()
+                };
+                let requirement = p.layout(
+                    label.into(),
+                    FontId::proportional(11.0),
                     MUTED,
-                    false,
+                    width - 28.0,
+                );
+                p.galley(
+                    picture.left_bottom() + egui::vec2(14.0, 42.0),
+                    requirement,
+                    MUTED,
                 );
                 if response.hovered() {
                     p.rect_stroke(card, 4, Stroke::new(1.0, ACCENT), StrokeKind::Inside);

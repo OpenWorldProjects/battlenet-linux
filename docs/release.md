@@ -33,3 +33,11 @@ Game pages use a bounded hero rather than filling the content area with a single
 The native shop has timed, pausable slides, previous/next and direct slide selection, responsive game cards, and category filters. Product actions open Blizzard’s store in the default browser. It is a curated game catalogue, not a synchronized store: live offers, prices, account balance and checkout are not implemented. No prices, sales, or news are fabricated.
 
 Account cookies are checked silently on startup and hourly. Confirmed expiry offers sign-in again; connectivity failures remain inconclusive and retry. Game authorizations renew through the managed browser after a 24-hour local reuse limit. See authentication.md for verification and limits.
+
+## Game access requirements
+
+Missing installations no longer all use the same Install action. Licensed games and subscription editions lead to access options in the official shop; an explicit “Install with existing access” action preserves installation for existing owners. Free base games retain Install. StarCraft distinguishes free Classic from licensed Remastered features, and retail WoW is distinguished from subscription-only Classic editions.
+
+These are product access rules, not verified account entitlements. License ownership, Game Pass eligibility, and active subscription status are not currently queried. The UI explicitly labels ownership as unverified and never infers a license from installed files. Installed games continue to enforce access through Blizzard.
+
+Reference rules: https://worldofwarcraft.blizzard.com/en-us/start ; https://eu.shop.battle.net/en-gb/product/starcraft-remastered ; https://overwatch.blizzard.com/ .
