@@ -35,6 +35,8 @@ pub enum Event {
     Connected,
     AccountVerified(Account),
     SessionRenewed,
+    FriendsLoaded,
+    Authorizing,
     Friend(Friend),
     Removed(Entity),
     Received(Message),
@@ -87,6 +89,8 @@ impl Connection {
 pub struct State {
     pub connection: Option<Connection>,
     pub connected: bool,
+    pub friends_loaded: bool,
+    pub authorizing: bool,
     pub verified_account: Option<Account>,
     pub last_renewed: Option<Instant>,
     pub error: bool,
@@ -104,6 +108,8 @@ impl State {
             let _ = c.commands.send(Command::Disconnect);
         }
         self.connected = false;
+        self.friends_loaded = false;
+        self.authorizing = false;
         self.verified_account = None;
         self.last_renewed = None;
         self.error = false;
@@ -114,12 +120,13 @@ impl State {
         self.unread = 0;
         self.status = "Disconnected".into();
     }
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self) -> bool {
         let events: Vec<_> = self
             .connection
             .as_ref()
             .map(|c| c.events.try_iter().take(128).collect())
             .unwrap_or_default();
+        let needs_another_frame = events.len() == 128;
         for event in events {
             match event {
                 Event::Status(s) => {
@@ -127,8 +134,12 @@ impl State {
                     self.error = false;
                 }
                 Event::AccountVerified(account) => self.verified_account = Some(account),
+                Event::FriendsLoaded => self.friends_loaded = true,
+                Event::Authorizing => self.authorizing = true,
                 Event::SessionRenewed => self.last_renewed = Some(Instant::now()),
                 Event::Connected => {
+                    self.friends_loaded = false;
+                    self.authorizing = false;
                     self.connected = true;
                     self.error = false;
                     self.status = "Connected to Battle.net chat".into();
@@ -168,6 +179,8 @@ impl State {
                     self.error = true;
                 }
                 Event::Disconnected => {
+                    self.friends_loaded = false;
+                    self.authorizing = false;
                     self.connected = false;
                     self.connection = None;
                 }
@@ -176,6 +189,7 @@ impl State {
         if self.messages.len() > 1000 {
             self.messages.drain(..self.messages.len() - 1000);
         }
+        needs_another_frame
     }
 }
 fn varint(mut n: u64, out: &mut Vec<u8>) {
@@ -725,6 +739,7 @@ fn run_connection(
                                 }
                             }
                         }
+                        emit(Event::FriendsLoaded);
                     }
                     Some(Pending::Presence(id)) => {
                         for field in fields(&body)?.iter().filter(|f| f.id == 2) {
@@ -787,6 +802,7 @@ fn run_connection(
                                 crate::session::clear(region, account);
                             }
                             auth_started = true;
+                            emit(Event::Authorizing);
                             deadline = Instant::now() + Duration::from_secs(300);
                             emit(Event::Status(
                                 "Connecting with your saved Battle.net session…".into(),
@@ -910,5 +926,58 @@ mod identity_tests {
         )
         .unwrap();
         assert_eq!(profile.battle_tag, expected.battle_tag);
+    }
+}
+
+#[cfg(test)]
+mod phase_tests {
+    use super::*;
+    #[test]
+    fn queued_friend_updates_schedule_frames_until_the_final_event() {
+        let (tx, events) = mpsc::channel();
+        let (commands, _) = mpsc::channel();
+        let mut state = State {
+            connection: Some(Connection { commands, events }),
+            ..State::default()
+        };
+        for _ in 0..1000 {
+            tx.send(Event::Status("Updating contacts".into())).unwrap();
+        }
+        tx.send(Event::FriendsLoaded).unwrap();
+        for _ in 0..50 {
+            let more = state.poll();
+            if !more {
+                assert!(state.friends_loaded);
+                return;
+            }
+        }
+        panic!("Queued updates did not finish");
+    }
+    #[test]
+    fn friend_loading_follows_authentication_and_subscription_completion() {
+        let (tx, events) = mpsc::channel();
+        let (commands, _) = mpsc::channel();
+        let mut state = State {
+            connection: Some(Connection { commands, events }),
+            ..State::default()
+        };
+        tx.send(Event::Authorizing).unwrap();
+        state.poll();
+        assert!(state.authorizing);
+        assert!(!state.connected);
+        assert!(!state.friends_loaded);
+        tx.send(Event::Connected).unwrap();
+        state.poll();
+        assert!(state.connected);
+        assert!(!state.authorizing);
+        assert!(!state.friends_loaded);
+        tx.send(Event::FriendsLoaded).unwrap();
+        state.poll();
+        assert!(state.friends_loaded);
+        tx.send(Event::Disconnected).unwrap();
+        state.poll();
+        assert!(!state.connected);
+        assert!(!state.friends_loaded);
+        assert!(!state.authorizing);
     }
 }

@@ -320,6 +320,12 @@ impl Launcher {
             app.enter_library(ctx);
         }
         if cfg!(debug_assertions) {
+            if std::env::args().any(|arg| arg.starts_with("--preview-")) {
+                app.game.auto_update = false;
+                for game in &mut app.profiles {
+                    game.auto_update = false;
+                }
+            }
             if std::env::args().any(|arg| arg == "--preview-account-menu") {
                 app.auto_chat = false;
                 app.account = Some(auth::Account {
@@ -533,7 +539,9 @@ impl Launcher {
         }
     }
     fn poll(&mut self, ctx: &egui::Context) {
-        self.chat.poll();
+        if self.chat.poll() {
+            ctx.request_repaint();
+        }
         if let Some(mut account) = self.chat.verified_account.take() {
             if account.battle_tag.is_none() {
                 account.battle_tag = self

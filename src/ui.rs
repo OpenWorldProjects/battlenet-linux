@@ -206,6 +206,8 @@ impl Launcher {
                 ui.label(
                     RichText::new(if self.chat.connected {
                         "Connected"
+                    } else if self.chat.authorizing {
+                        "Signing in…"
                     } else if self.chat.connection.is_some() {
                         "Connecting…"
                     } else {
@@ -216,13 +218,18 @@ impl Launcher {
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.chat.connection.is_some() {
-                        if ui
-                            .small_button("•••")
-                            .on_hover_text("Chat options")
-                            .clicked()
-                        {
-                            self.chat.open = true;
-                        }
+                        let options = ui.small_button("•••").on_hover_text("Chat options");
+                        egui::Popup::menu(&options).show(|ui| {
+                            if ui.button("Open chats").clicked() {
+                                self.chat.open = true;
+                                ui.close();
+                            }
+                            if ui.button("Disconnect").clicked() {
+                                self.chat_paused = true;
+                                self.chat.disconnect();
+                                ui.close();
+                            }
+                        });
                     } else if self.signed_in_this_session
                         && self.pending.is_none()
                         && ui.small_button("Connect").clicked()
@@ -336,8 +343,14 @@ impl Launcher {
             if self.chat.contacts.is_empty() {
                 ui.add_space(18.0);
                 ui.label(
-                    RichText::new(if self.chat.connection.is_some() {
+                    RichText::new(if self.chat.connected && self.chat.friends_loaded {
+                        "No friends to display."
+                    } else if self.chat.connected {
                         "Loading your friends…"
+                    } else if self.chat.authorizing {
+                        "Signing in to Battle.net…"
+                    } else if self.chat.connection.is_some() {
+                        "Connecting to Battle.net…"
                     } else if self.signed_in_this_session {
                         "Your friends will appear here when chat connects."
                     } else {
@@ -1483,11 +1496,10 @@ impl Launcher {
     }
     fn home(&mut self, ui: &mut egui::Ui) {
         let width = ui.available_width();
-        let hero_height = if ui.clip_rect().height() < 700.0 || width < 850.0 {
-            320.0
-        } else {
-            350.0
-        };
+        let visible_height = ui.clip_rect().height();
+        let hero_height = (visible_height * 0.46).clamp(200.0, 300.0);
+        let compact = hero_height < 250.0;
+        let picture_height = (visible_height - hero_height - 175.0).clamp(48.0, 150.0);
         let (hero, _) = ui.allocate_exact_size(egui::vec2(width, hero_height), Sense::hover());
         let p = ui.painter().clone();
         cover(&p, &self.art.hero, hero);
@@ -1501,37 +1513,46 @@ impl Launcher {
         image(
             &p,
             &self.art.logo,
-            Rect::from_min_size(hero.min + egui::vec2(38.0, 25.0), egui::vec2(255.0, 106.7)),
+            Rect::from_min_size(
+                hero.min + egui::vec2(26.0, 12.0),
+                if compact {
+                    egui::vec2(150.0, 62.8)
+                } else {
+                    egui::vec2(210.0, 87.9)
+                },
+            ),
         );
         type_at(
             &p,
-            hero.min + egui::vec2(40.0, 152.0),
+            hero.min + egui::vec2(28.0, if compact { 84.0 } else { 110.0 }),
             "Your next battle awaits",
-            30.0,
+            if compact { 24.0 } else { 28.0 },
             WHITE,
             true,
         );
         type_at(
             &p,
-            hero.min + egui::vec2(40.0, 199.0),
+            hero.min + egui::vec2(28.0, if compact { 124.0 } else { 152.0 }),
             "Command the Terran, Zerg, and Protoss.",
             14.0,
             Color32::from_rgb(200, 210, 222),
             false,
         );
-        type_at(
-            &p,
-            hero.min + egui::vec2(40.0, 222.0),
-            "Explore campaigns, co-op, and competitive multiplayer.",
-            14.0,
-            Color32::from_rgb(200, 210, 222),
-            false,
-        );
+        if !compact {
+            type_at(
+                &p,
+                hero.min + egui::vec2(28.0, 175.0),
+                "Explore campaigns, co-op, and competitive multiplayer.",
+                14.0,
+                Color32::from_rgb(200, 210, 222),
+                false,
+            );
+        }
         if action(
             ui,
             Rect::from_min_size(
-                hero.min + egui::vec2(40.0, hero_height - 72.0),
-                egui::vec2(166.0, 40.0),
+                hero.min + egui::vec2(28.0, hero_height - 48.0),
+                egui::vec2(166.0, 34.0),
             ),
             "Explore the game",
             false,
@@ -1540,7 +1561,7 @@ impl Launcher {
             self.open_link("https://starcraft2.blizzard.com/");
         }
         ui.advance_cursor_after_rect(hero);
-        ui.add_space(25.0);
+        ui.add_space(16.0);
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("Discover StarCraft II")
@@ -1577,9 +1598,9 @@ impl Launcher {
         {
             let card = Rect::from_min_size(
                 start + egui::vec2(i as f32 * (cw + gap), 0.0),
-                egui::vec2(cw, cw * 0.48 + 84.0),
+                egui::vec2(cw, picture_height + 78.0),
             );
-            let picture = Rect::from_min_size(card.min, egui::vec2(cw, cw * 0.48));
+            let picture = Rect::from_min_size(card.min, egui::vec2(cw, picture_height));
             cover(&p, &self.art.cards[i], picture);
             p.rect_filled(
                 Rect::from_min_max(picture.left_bottom(), card.max),
@@ -1625,7 +1646,7 @@ impl Launcher {
         }
         ui.advance_cursor_after_rect(Rect::from_min_size(
             start,
-            egui::vec2(width, cw * 0.48 + 84.0),
+            egui::vec2(width, picture_height + 78.0),
         ));
         ui.add_space(8.0);
     }
