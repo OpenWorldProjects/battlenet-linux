@@ -36,3 +36,15 @@ A blank chat authorization window was reproduced inside the GNOME Flatpak runtim
 ## Session-only cookie handoff
 
 WebKit's persistent cookie store does not retain session-only cookies when the account helper exits. A regression fixture reproduced this: the account signed in successfully, but the next helper lost its authenticated state. On a successful account/game/chat sign-in, the helper now retains session cookies from the allowed Blizzard login origins for at most one day in the existing private cookie database. Existing persistent cookies keep their original expiry; Secure/HttpOnly and other cookie attributes are preserved. This local retention does not extend server-side authorization. Sign out removes the database as before. The integration fixture checks account-to-chat cookie reuse and automatic callback return without showing another window. Chat allows a short silent handoff before showing an interactive login window if needed. Real Blizzard session revocation or required MFA can still demand sign-in.
+
+## Native credential renewal
+
+After an authenticated logon, the native client requests AuthenticationServer.GenerateWebCredentials (method 8), then requests renewal every 30 minutes. Reconnect supplies these opaque server-issued bytes in LogonRequest.cached_web_credentials (field 12). A rejected cache is removed and retried once without it; only then can Blizzard's browser challenge require interaction. Renewal errors do not disconnect an otherwise valid chat session, and a timed-out renewal retries after five minutes.
+
+Renewal credentials are stored atomically with mode 0600 under the existing 0700 session directory, bound to account and region, and removed by Sign out. They are not passwords and are never logged or placed in arguments. Local reuse is capped at 30 days, independently of any earlier server-side revocation. Cache corruption, oversized data, wrong account/region, and invalid timestamps are rejected. The optional website check is now restricted to CN and cannot revoke EU/US/KR chat authentication.
+
+The wire definitions and method ID were checked against the primary generated protocol definitions:
+https://github.com/TrinityCore/TrinityCore/blob/master/src/server/proto/Client/authentication_service.pb.cc
+https://github.com/superp00t/gophercraft/blob/master/bnet/bgs/protocol/authentication/v1/authentication_service.pb.go
+
+Cache binding, bounds and private atomic writes pass local tests. Live renewal still needs an authenticated connection to seed the credential cache; the noninteractive live check reached Blizzard's browser challenge but did not complete authentication. The implementation must not be described as verified password-free renewal until that round trip succeeds.

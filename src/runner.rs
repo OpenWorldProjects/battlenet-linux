@@ -374,7 +374,7 @@ pub fn login_helper() -> Option<PathBuf> {
     }
     sibling.is_file().then_some(sibling)
 }
-fn session_dir() -> Result<PathBuf, String> {
+pub(crate) fn session_dir() -> Result<PathBuf, String> {
     let path = directories::ProjectDirs::from("", "", "battlenet-linux-launcher")
         .ok_or("Cannot resolve account storage.")?
         .data_local_dir()

@@ -34,6 +34,7 @@ pub enum Event {
     Status(String),
     Connected,
     AccountVerified(Account),
+    SessionRenewed,
     Friend(Friend),
     Removed(Entity),
     Received(Message),
@@ -87,6 +88,7 @@ pub struct State {
     pub connection: Option<Connection>,
     pub connected: bool,
     pub verified_account: Option<Account>,
+    pub last_renewed: Option<Instant>,
     pub error: bool,
     pub status: String,
     pub contacts: Vec<Friend>,
@@ -103,6 +105,7 @@ impl State {
         }
         self.connected = false;
         self.verified_account = None;
+        self.last_renewed = None;
         self.error = false;
         self.contacts.clear();
         self.messages.clear();
@@ -124,6 +127,7 @@ impl State {
                     self.error = false;
                 }
                 Event::AccountVerified(account) => self.verified_account = Some(account),
+                Event::SessionRenewed => self.last_renewed = Some(Instant::now()),
                 Event::Connected => {
                     self.connected = true;
                     self.error = false;
@@ -325,6 +329,7 @@ enum Pending {
     Connect,
     Auth,
     Friends,
+    Renewal,
     Presence(Entity),
     Send(Message),
 }
@@ -405,6 +410,22 @@ fn run(
     commands: Receiver<Command>,
     emit: &impl Fn(Event),
 ) -> Result<()> {
+    let result = run_connection(region, account, &commands, emit, true);
+    if matches!(&result,Err(error) if error=="CACHED_SESSION_REJECTED") {
+        if let Some(account) = account {
+            crate::session::clear(region, account);
+        }
+        return run_connection(region, account, &commands, emit, false);
+    }
+    result
+}
+fn run_connection(
+    region: &str,
+    account: Option<&Account>,
+    commands: &Receiver<Command>,
+    emit: &impl Fn(Event),
+    use_cached: bool,
+) -> Result<()> {
     if let Some(account) = account {
         account.validate()?;
     }
@@ -470,6 +491,14 @@ fn run(
         .map_err(|e| e.to_string())?;
     let mut services = [0u32; 4];
     let mut input = Vec::new();
+    let cached = if use_cached {
+        account.and_then(|a| crate::session::load(region, a))
+    } else {
+        None
+    };
+    let mut cached_attempt = cached.is_some();
+    let mut next_renewal = Instant::now();
+    let mut renewal_started: Option<Instant> = None;
     let mut connected = false;
     let mut own_account: Option<(Entity, Account)> = None;
     let mut auth: Option<Receiver<Result<crate::auth::Ticket>>> = None;
@@ -538,6 +567,23 @@ fn run(
         if !connected && Instant::now() > deadline {
             return Err("Chat authorization timed out. Reconnect to try again.".into());
         }
+        if renewal_started.is_some_and(|at| at.elapsed() > Duration::from_secs(30)) {
+            wire.pending
+                .retain(|_, pending| !matches!(pending, Pending::Renewal));
+            renewal_started = None;
+            next_renewal = Instant::now() + Duration::from_secs(300);
+            emit(Event::Status(
+                "Session refresh timed out; it will retry automatically.".into(),
+            ));
+        }
+        if connected
+            && Instant::now() >= next_renewal
+            && !wire.pending.values().any(|p| matches!(p, Pending::Renewal))
+        {
+            wire.request(services[0], 8, &[], Some(Pending::Renewal))?;
+            renewal_started = Some(Instant::now());
+            next_renewal = Instant::now() + Duration::from_secs(30 * 60);
+        }
         if connected && last_ping.elapsed() > Duration::from_secs(25) {
             wire.request(0, 5, &[], None)?;
             last_ping = Instant::now();
@@ -596,11 +642,25 @@ fn run(
             let method = num(header, 2)? as u32;
             let token = num(header, 3)? as u32;
             let status = num(header, 6)?;
-            let body = input[2 + hlen..2 + hlen + len].to_vec();
+            let body = Zeroizing::new(input[2 + hlen..2 + hlen + len].to_vec());
             input.drain(..2 + hlen + len);
             if service == 254 || response_flag {
                 let pending = wire.pending.remove(&token);
                 if status != 0 {
+                    if matches!(pending, Some(Pending::Renewal)) {
+                        renewal_started = None;
+                        emit(Event::Status(format!(
+                            "Connected; session renewal was rejected (code {status})."
+                        )));
+                        continue;
+                    }
+                    if matches!(pending, Some(Pending::Auth))
+                        && cached_attempt
+                        && !auth_started
+                        && !connected
+                    {
+                        return Err("CACHED_SESSION_REJECTED".into());
+                    }
                     if matches!(pending, Some(Pending::Presence(_))) {
                         continue;
                     }
@@ -630,17 +690,30 @@ fn run(
                                 }
                             }
                         }
-                        let mut login = Vec::new();
+                        let mut login = Zeroizing::new(Vec::new());
                         bytes(1, b"App", &mut login);
                         bytes(2, b"Win", &mut login);
                         bytes(3, b"enUS", &mut login);
                         number(6, 1, &mut login);
                         number(10, 1, &mut login);
                         number(11, 1, &mut login);
+                        if let Some(credential) = &cached {
+                            bytes(12, credential, &mut login);
+                        }
                         wire.request(services[0], 1, &login, Some(Pending::Auth))?;
                         emit(Event::Status(
                             "Waiting for Battle.net chat authorization…".into(),
                         ));
+                    }
+                    Some(Pending::Renewal) => {
+                        renewal_started = None;
+                        let credential = Zeroizing::new(blob(&body, 1)?.to_vec());
+                        if let Some((_, profile)) = &own_account {
+                            match crate::session::save(region, profile, &credential) {
+                                Ok(()) => emit(Event::SessionRenewed),
+                                Err(error) => emit(Event::Status(error)),
+                            }
+                        }
                     }
                     Some(Pending::Friends) => {
                         for entry in fields(&body)?.iter().filter(|f| f.id == 5) {
@@ -680,10 +753,18 @@ fn run(
                     (1, 5) => {
                         let error = num(&body, 1)?;
                         if error != 0 {
+                            if cached_attempt && !auth_started && !connected {
+                                return Err("CACHED_SESSION_REJECTED".into());
+                            }
                             return Err(format!("Chat login was rejected (code {error})"));
                         }
                         let id = entity(blob(&body, 2)?)?;
-                        let verified = verified_profile(id, account)?;
+                        let mut verified = verified_profile(id, account)?;
+                        let tag = text(&body, 7)?;
+                        if !tag.is_empty() {
+                            verified.battle_tag = Some(tag);
+                            verified.validate()?;
+                        }
                         own_account = Some((id, verified.clone()));
                         emit(Event::AccountVerified(verified));
                         names.push_front(id);
@@ -701,6 +782,10 @@ fn run(
                             );
                         }
                         if !auth_started {
+                            cached_attempt = false;
+                            if let Some(account) = account {
+                                crate::session::clear(region, account);
+                            }
                             auth_started = true;
                             deadline = Instant::now() + Duration::from_secs(300);
                             emit(Event::Status(

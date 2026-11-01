@@ -4,6 +4,7 @@ mod chat;
 mod discovery;
 mod patcher;
 mod runner;
+mod session;
 mod tray;
 mod ui;
 mod updates;
@@ -488,6 +489,11 @@ impl Launcher {
         });
     }
     fn apply_session_result(&mut self, result: Result<Option<auth::Account>, String>) {
+        // Website cookies do not determine validity of the native chat account.
+        // The website flow is only the fallback for the unsupported CN service.
+        if self.game.region != "CN" {
+            return;
+        }
         match result {
             Ok(Some(account))
                 if self
@@ -593,7 +599,8 @@ impl Launcher {
         }
         // With automatic chat enabled, its authenticated connection verifies the
         // session directly. Do not first gate it on the account website.
-        if self.account.is_some()
+        if self.game.region == "CN"
+            && self.account.is_some()
             && self.session_check.is_none()
             && self.pending.is_none()
             && self.chat.connection.is_none()
@@ -1046,6 +1053,9 @@ fn main() -> eframe::Result {
         while Instant::now() < deadline {
             match connection.events.recv_timeout(Duration::from_millis(250)) {
                 Ok(chat::Event::Status(status)) => println!("{status}"),
+                Ok(chat::Event::SessionRenewed) => {
+                    println!("Server-issued session credentials renewed and saved.")
+                }
                 Ok(chat::Event::Connected) => {
                     connected_at = Some(Instant::now());
                     println!("Chat account authenticated.");
@@ -1057,7 +1067,7 @@ fn main() -> eframe::Result {
                 }
                 _ => {}
             }
-            if connected_at.is_some_and(|time| time.elapsed() > Duration::from_secs(3)) {
+            if connected_at.is_some_and(|time| time.elapsed() > Duration::from_secs(8)) {
                 let _ = connection.commands.send(chat::Command::Disconnect);
                 println!("Friend records received: {contacts}. No messages sent.");
                 return Ok(());
