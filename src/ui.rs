@@ -68,6 +68,9 @@ fn action(ui: &mut egui::Ui, rect: Rect, label: &str, primary: bool, enabled: bo
         && enabled
 }
 fn image(p: &egui::Painter, texture: &TextureHandle, rect: Rect) {
+    let size = texture.size_vec2();
+    let scale = (rect.width() / size.x).min(rect.height() / size.y);
+    let rect = Rect::from_center_size(rect.center(), size * scale);
     p.image(
         texture.id(),
         rect,
@@ -315,10 +318,17 @@ impl Launcher {
             let mut search = ui
                 .ctx()
                 .data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
+            let search_align = if search.is_empty() {
+                egui::Align::Center
+            } else {
+                egui::Align::Min
+            };
             ui.add_sized(
                 [rect.width(), 32.0],
                 egui::TextEdit::singleline(&mut search)
                     .hint_text("Search friends")
+                    .horizontal_align(search_align)
+                    .vertical_align(egui::Align::Center)
                     .char_limit(100),
             );
             ui.ctx()
@@ -701,24 +711,8 @@ impl Launcher {
                 let p = ui.painter();
                 p.rect_filled(card, 6, PANEL);
                 let picture = Rect::from_min_size(card.min, egui::vec2(width, 148.0));
-                if matches!(product.code, "S1" | "S2" | "Hero") {
-                    let art = match product.code {
-                        "S1" => &self.art.starcraft,
-                        "Hero" => &self.art.heroes,
-                        _ => &self.art.hero,
-                    };
-                    cover(p, art, picture);
-                    shade(p, picture);
-                } else {
-                    p.rect_filled(picture, 6, Color32::from_rgb(25, 39, 57));
-                }
-                if !matches!(product.code, "S1" | "S2" | "Hero") {
-                    image(
-                        p,
-                        self.game_icon(product.code),
-                        Rect::from_center_size(picture.center(), egui::vec2(66.0, 66.0)),
-                    );
-                }
+                p.rect_filled(picture, 4, Color32::from_rgb(14, 17, 23));
+                image(p, self.game_art_for(product.code), picture);
                 let title = p.layout(product.name.into(), bold(15.0), WHITE, width - 28.0);
                 p.galley(card.min + egui::vec2(14.0, 160.0), title, WHITE);
                 let requirement = p.layout(
@@ -982,12 +976,15 @@ impl Launcher {
             _ => 0,
         }]
     }
+    fn game_art_for(&self, code: &str) -> &TextureHandle {
+        let index = catalog::PRODUCTS
+            .iter()
+            .position(|product| product.code == code)
+            .unwrap_or(0);
+        &self.art.game_covers[index]
+    }
     fn game_art(&self) -> &TextureHandle {
-        match self.game.product_code.as_str() {
-            "S1" => &self.art.starcraft,
-            "Hero" => &self.art.heroes,
-            _ => &self.art.hero,
-        }
+        self.game_art_for(&self.game.product_code)
     }
     fn game_menu(&mut self, ui: &mut egui::Ui, code: &str) {
         ui.set_min_width(220.0);
@@ -1319,6 +1316,39 @@ impl Launcher {
                 ui.close();
             }
             if self.account.is_some() {
+                if ui
+                    .add_enabled(
+                        self.pending.is_none()
+                            && !self.login_via_chat
+                            && !self.chat.authorizing
+                            && (self.chat.connection.is_none() || self.chat.connected),
+                        egui::Button::new("Refresh session"),
+                    )
+                    .on_hover_text(
+                        "Reconnect using saved credentials. This does not check game ownership.",
+                    )
+                    .clicked()
+                {
+                    if self.game.region == "CN" {
+                        self.login(ui.ctx());
+                    } else if let Some(account) = self.account.clone() {
+                        self.chat.connection.take();
+                        self.chat.connected = false;
+                        self.chat.friends_loaded = false;
+                        self.chat.verified_account = None;
+                        self.chat.last_renewed = None;
+                        self.chat_paused = false;
+                        self.next_chat_connect = Instant::now() + Duration::from_secs(30);
+                        self.chat.status = "Refreshing session…".into();
+                        self.chat.connection = Some(chat::Connection::start(
+                            self.game.region.clone(),
+                            account,
+                            ui.ctx().clone(),
+                        ));
+                        self.session_note.clear();
+                    }
+                    ui.close();
+                }
                 if ui
                     .add_enabled(
                         self.pending.is_none() && !self.login_via_chat,
@@ -1780,16 +1810,8 @@ impl Launcher {
         let height = (ui.clip_rect().height() * 0.53).clamp(240.0, 320.0);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
         let p = ui.painter();
-        if matches!(self.game.product_code.as_str(), "S1" | "Hero") {
-            cover(p, self.game_art(), rect);
-        } else {
-            p.rect_filled(rect, 6, Color32::from_rgb(25, 39, 57));
-            image(
-                p,
-                self.game_icon(&self.game.product_code),
-                Rect::from_center_size(rect.center(), egui::vec2(110.0, 110.0)),
-            );
-        }
+        p.rect_filled(rect, 6, Color32::from_rgb(14, 17, 23));
+        image(p, self.game_art(), rect);
         shade(p, rect);
         type_at(
             p,
@@ -1876,36 +1898,14 @@ impl Launcher {
                         .unwrap()
                 };
                 let installed = runner::install_root(&game).is_ok();
-                let (card, response) =
-                    ui.allocate_exact_size(egui::vec2(width, width * 1.30 + 74.0), Sense::click());
+                let (card, response) = ui.allocate_exact_size(
+                    egui::vec2(width, width * 9.0 / 16.0 + 74.0),
+                    Sense::click(),
+                );
                 let p = ui.painter();
-                let picture = Rect::from_min_size(card.min, egui::vec2(width, width * 1.30));
-                let texture = match product.code {
-                    "S1" => &self.art.starcraft,
-                    "Hero" => &self.art.heroes,
-                    _ => &self.art.hero,
-                };
-                if matches!(product.code, "S2" | "S1" | "Hero") {
-                    cover(p, texture, picture);
-                } else {
-                    p.rect_filled(picture, 4, Color32::from_rgb(25, 39, 57));
-                    image(
-                        p,
-                        self.game_icon(product.code),
-                        Rect::from_center_size(picture.center(), egui::vec2(100.0, 100.0)),
-                    );
-                }
-                shade(p, picture);
-                if product.code == "S2" {
-                    image(
-                        p,
-                        &self.art.logo,
-                        Rect::from_min_size(
-                            picture.left_bottom() + egui::vec2(12.0, -95.0),
-                            egui::vec2(width - 24.0, 85.0),
-                        ),
-                    );
-                }
+                let picture = Rect::from_min_size(card.min, egui::vec2(width, width * 9.0 / 16.0));
+                p.rect_filled(picture, 4, Color32::from_rgb(14, 17, 23));
+                image(p, self.game_art_for(product.code), picture);
                 p.rect_filled(
                     Rect::from_min_max(picture.left_bottom(), card.max),
                     4,

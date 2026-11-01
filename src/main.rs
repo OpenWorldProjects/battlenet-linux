@@ -40,6 +40,7 @@ struct Artwork {
     heroes: TextureHandle,
 
     game_icons: Vec<TextureHandle>,
+    game_covers: Vec<TextureHandle>,
     logo: TextureHandle,
     cards: [TextureHandle; 3],
 }
@@ -269,6 +270,67 @@ impl Launcher {
                 heroes: texture(ctx, "heroes", include_bytes!("../assets/heroes.image")),
                 logo: texture(ctx, "logo", include_bytes!("../assets/logo.png")),
                 game_icons: ui::game_icons(ctx),
+                game_covers: vec![
+                    texture(ctx, "cover-S2", include_bytes!("../assets/game-art/S2.jpg")),
+                    texture(ctx, "cover-S1", include_bytes!("../assets/game-art/S1.jpg")),
+                    texture(
+                        ctx,
+                        "cover-Hero",
+                        include_bytes!("../assets/game-art/Hero.jpg"),
+                    ),
+                    texture(
+                        ctx,
+                        "cover-Pro",
+                        include_bytes!("../assets/game-art/Pro.jpg"),
+                    ),
+                    texture(ctx, "cover-W3", include_bytes!("../assets/game-art/W3.jpg")),
+                    texture(
+                        ctx,
+                        "cover-W1R",
+                        include_bytes!("../assets/game-art/W1R.jpg"),
+                    ),
+                    texture(
+                        ctx,
+                        "cover-W2R",
+                        include_bytes!("../assets/game-art/W2R.jpg"),
+                    ),
+                    texture(
+                        ctx,
+                        "cover-WoW",
+                        include_bytes!("../assets/game-art/WoW.jpg"),
+                    ),
+                    texture(
+                        ctx,
+                        "cover-WoWC",
+                        include_bytes!("../assets/game-art/WoWC.jpg"),
+                    ),
+                    texture(
+                        ctx,
+                        "cover-WoWE",
+                        include_bytes!("../assets/game-art/WoWE.jpg"),
+                    ),
+                    texture(
+                        ctx,
+                        "cover-WoWA",
+                        include_bytes!("../assets/game-art/WoWA.jpg"),
+                    ),
+                    texture(
+                        ctx,
+                        "cover-WTCG",
+                        include_bytes!("../assets/game-art/WTCG.jpg"),
+                    ),
+                    texture(ctx, "cover-D3", include_bytes!("../assets/game-art/D3.jpg")),
+                    texture(
+                        ctx,
+                        "cover-Fen",
+                        include_bytes!("../assets/game-art/Fen.jpg"),
+                    ),
+                    texture(
+                        ctx,
+                        "cover-OSI",
+                        include_bytes!("../assets/game-art/OSI.jpg"),
+                    ),
+                ],
                 cards: [
                     texture(ctx, "races", include_bytes!("../assets/races.png")),
                     texture(ctx, "coop", include_bytes!("../assets/coop.png")),
@@ -394,6 +456,9 @@ impl Launcher {
             }
             if std::env::args().any(|arg| arg == "--preview-small") {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(960.0, 700.0)));
+            }
+            if std::env::args().any(|arg| arg == "--preview-games") {
+                app.tab = 1;
             }
             if std::env::args().any(|arg| arg == "--preview-shop") {
                 app.tab = 2;

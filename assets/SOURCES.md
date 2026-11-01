@@ -22,3 +22,23 @@ Official StarCraft II artwork retrieved from https://starcraft2.blizzard.com/en-
 - `starcraft-logo.png`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/blt1ff010bc61d5b9eb/6aa1fbadf8f124a920bcba58/logo.png (reference asset, not used as the compact icon).
 
 - Account portraits are fetched at runtime from Blizzard's public `https://blzprofile.akamaized.net/static/avatar/account/<avatarId>.jpg` catalogue; the selected numeric ID comes from account presence, never from a guessed BattleTag mapping. Manifest: https://blzprofile.akamaized.net/static/avatar/account/index.json. Portraits remain Blizzard assets and are cached locally rather than bundled.
+
+## Game catalogue artwork
+
+The following official website images are resized to at most 1200×900 and encoded as JPEG for bundling. WoW editions currently share the official WoW artwork.
+
+- `game-art/S2.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/bltbe2068a317e02d9f/6966bac0fb2fd910dbda4a26/og_image.webp
+- `game-art/S1.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/blt9cbae43d0642e6ba/6a9b42028102310ecb81e0e3/OG_Image.png
+- `game-art/Hero.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/blt8c01f980b76eb350/67ce291560fcdc2c6cfed487/og_image.webp
+- `game-art/Pro.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blt2477dcaf4ebd440c/blt45586c965db08717/6823abc24dee72d806fff5e2/OpenGraph.jpg
+- `game-art/W3.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/blt806d59ff0b4e0508/6aa88158ad9209ba7f5629ef/rebirth_og.png
+- `game-art/WoW.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/bltb5a24e5ab1e2cfb0/6a88e3589b942efdb6f74110/wow-thumbnail-homepage.jpg
+- `game-art/WoWC.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/bltb5a24e5ab1e2cfb0/6a88e3589b942efdb6f74110/wow-thumbnail-homepage.jpg
+- `game-art/WoWE.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/bltb5a24e5ab1e2cfb0/6a88e3589b942efdb6f74110/wow-thumbnail-homepage.jpg
+- `game-art/WoWA.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/bltb5a24e5ab1e2cfb0/6a88e3589b942efdb6f74110/wow-thumbnail-homepage.jpg
+- `game-art/WTCG.jpg`: https://d39zum0jwvcigt.cloudfront.net/_next/static/images/default-475d770302527dbab7708dca2af05afd.jpg
+- `game-art/D3.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/blte3178c04d93773f1/67ce27f440e6651e27e17582/og_image.webp
+- `game-art/Fen.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/blt7e63ffa7acc28b95/692f34c7826cf18bafcedc51/d4-open-graph_001.jpg?format=webp
+- `game-art/OSI.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blt9c12f249ac15c7ec/blt185726ac34f99175/698100271279400c31d2c641/infernal_OG.webp
+- `game-art/W1R.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blta8f9a8e092360c6c/bltef23deacbfc70dd3/671fd0f27c61fd5321468778/blizzard_game_card_background_wr.jpg
+- `game-art/W2R.jpg`: https://blz-contentstack-images.akamaized.net/v3/assets/blta8f9a8e092360c6c/blt8d825cfe40ef2d21/671fd10ad32591ddef9e7606/blizzard_game_card_background_w2r.jpg

@@ -326,9 +326,8 @@ impl Access {
         match self {
             Self::FreeBase => "INSTALL",
             Self::ClassicWithPaidUpgrade => "INSTALL CLASSIC",
-            Self::TrialWithSubscription | Self::Subscription | Self::License => {
-                "VIEW ACCESS OPTIONS"
-            }
+            Self::TrialWithSubscription | Self::Subscription => "SUBSCRIBE",
+            Self::License => "BUY",
         }
     }
     pub fn installation_label(self) -> &'static str {
@@ -360,7 +359,17 @@ mod access_tests {
             "W1R", "W2R", "W3", "D3", "Fen", "OSI", "WoWC", "WoWE", "WoWA",
         ] {
             assert!(access(code).requires_access_options(), "{code}");
-            assert_eq!(access(code).primary_action(), "VIEW ACCESS OPTIONS");
+            assert_eq!(
+                access(code).primary_action(),
+                if matches!(
+                    access(code),
+                    Access::Subscription | Access::TrialWithSubscription
+                ) {
+                    "SUBSCRIBE"
+                } else {
+                    "BUY"
+                }
+            );
         }
         assert_eq!(access("S1"), Access::ClassicWithPaidUpgrade);
         assert_eq!(access("WoW"), Access::TrialWithSubscription);

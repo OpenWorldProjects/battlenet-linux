@@ -46,3 +46,10 @@ Reference rules: https://worldofwarcraft.blizzard.com/en-us/start ; https://eu.s
 ## Desktop polish and screenshots
 
 The dark theme is explicit across buttons, menus, fields and popups, including on desktops using a light system theme. Small chat and carousel controls have larger hit areas. Main content uses available desktop width; larger viewports scale the home banner and feature images while keeping the friends sidebar anchored. Documentation screenshots use isolated preview profiles and synthetic contacts. These are launcher layout improvements; an SC2 gameplay ultrawide patch remains unimplemented.
+
+
+## Catalogue artwork and account refresh
+
+All 15 catalogue entries now have bundled official game artwork. Landscape library frames and aspect-preserving image placement avoid stretching or trimming the source art; portrait Warcraft artwork is letterboxed. WoW editions currently share WoW artwork. Missing licensed games show BUY and subscription editions show SUBSCRIBE. These describe product requirements, not verified account ownership; purchases do not automatically switch the action to Install. Existing owners retain Install with existing access.
+
+Account menu → Refresh session reconnects using saved credentials and retains the local conversation. It is disabled during an active sign-in attempt; CN uses its existing website login flow. The separate game-authorization refresh remains in Game settings. Neither action is an entitlement query.
