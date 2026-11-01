@@ -357,6 +357,10 @@ impl Launcher {
             }
             if std::env::args().any(|arg| arg == "--preview-avatars") {
                 app.auto_chat = false;
+                app.game.install_dir = "/home/player/Games/StarCraft II".into();
+                app.game.executable =
+                    "/home/player/Games/StarCraft II/Support64/SC2Switcher_x64.exe".into();
+                app.game.prefix = "/home/player/Games/battlenet".into();
                 app.account = Some(auth::Account {
                     account_id: "12345".into(),
                     battle_tag: Some("Preview#1234".into()),
@@ -1140,6 +1144,16 @@ fn shade(p: &egui::Painter, r: Rect) {
     p.add(egui::Shape::mesh(mesh));
 }
 fn main() -> eframe::Result {
+    if std::env::args().any(|arg| arg == "--check-avatars") {
+        match avatars::check() {
+            Ok(()) => println!("Public avatar download and decode passed."),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
     if cfg!(debug_assertions) && std::env::args().any(|arg| arg == "--check-chat") {
         let Some(account) = runner::remembered_account() else {
             eprintln!("No saved account for chat check.");

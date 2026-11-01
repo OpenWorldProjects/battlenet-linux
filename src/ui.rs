@@ -159,7 +159,9 @@ pub(super) fn setup(ctx: &egui::Context) {
         .families
         .insert(FontFamily::Name("bold".into()), fallback);
     ctx.set_fonts(fonts);
+    ctx.set_theme(egui::Theme::Dark);
     let mut style = (*ctx.global_style()).clone();
+    style.visuals = egui::Visuals::dark();
     style
         .text_styles
         .insert(egui::TextStyle::Body, FontId::proportional(14.0));
@@ -170,6 +172,23 @@ pub(super) fn setup(ctx: &egui::Context) {
         .text_styles
         .insert(egui::TextStyle::Heading, bold(22.0));
     style.spacing.menu_margin = egui::Margin::same(8);
+    style.spacing.button_padding = egui::vec2(12.0, 7.0);
+    style.visuals.hyperlink_color = ACCENT;
+    style.visuals.panel_fill = BG;
+    for widget in [
+        &mut style.visuals.widgets.inactive,
+        &mut style.visuals.widgets.hovered,
+        &mut style.visuals.widgets.active,
+        &mut style.visuals.widgets.open,
+    ] {
+        widget.corner_radius = 4.into();
+        widget.fg_stroke = Stroke::new(1.0, WHITE);
+    }
+    style.visuals.widgets.inactive.bg_fill = PANEL;
+    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(47, 60, 77);
+    style.visuals.widgets.active.bg_fill = Color32::from_rgb(31, 73, 113);
+    style.visuals.widgets.open.bg_fill = Color32::from_rgb(31, 73, 113);
+    style.visuals.widgets.open.weak_bg_fill = Color32::from_rgb(31, 73, 113);
     style.spacing.interact_size.y = 32.0;
     style.spacing.combo_width = 190.0;
     style.visuals.menu_corner_radius = 6.into();
@@ -260,7 +279,9 @@ impl Launcher {
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.chat.connection.is_some() {
-                        let options = ui.small_button("•••").on_hover_text("Chat options");
+                        let options = ui
+                            .add_sized([32.0, 28.0], egui::Button::new("•••"))
+                            .on_hover_text("Chat options");
                         egui::Popup::menu(&options).show(|ui| {
                             if ui.button("Open chats").clicked() {
                                 self.chat.open = true;
@@ -272,7 +293,8 @@ impl Launcher {
                                 ui.close();
                             }
                         });
-                    } else if self.signed_in_this_session
+                    } else if !self.chat.connected
+                        && self.signed_in_this_session
                         && self.pending.is_none()
                         && ui.small_button("Connect").clicked()
                     {
@@ -607,7 +629,7 @@ impl Launcher {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if ui
-                .small_button("‹")
+                .add_sized([32.0, 32.0], egui::Button::new("‹"))
                 .on_hover_text("Previous slide")
                 .clicked()
             {
@@ -627,7 +649,11 @@ impl Launcher {
                     since = Instant::now();
                 }
             }
-            if ui.small_button("›").on_hover_text("Next slide").clicked() {
+            if ui
+                .add_sized([32.0, 32.0], egui::Button::new("›"))
+                .on_hover_text("Next slide")
+                .clicked()
+            {
                 index = (index + 1) % slides.len();
                 since = Instant::now();
             }
@@ -1417,13 +1443,8 @@ impl Launcher {
             b.min + egui::vec2(24.0, 165.0),
             egui::pos2(split - 24.0, b.bottom() - 117.0),
         );
-        // Use logical points so the same limit works at every display scale.
-        // Keep the social sidebar at the window edge; center the readable page
-        // within the remaining space instead of stretching artwork indefinitely.
-        let body = Rect::from_center_size(
-            body.center(),
-            egui::vec2(body.width().min(1280.0), body.height()),
-        );
+        // Use the available desktop width; content chooses its own image height.
+        // The social sidebar remains anchored to the right edge at every scale.
         ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
             ui.set_width(body.width());
             egui::ScrollArea::vertical()
@@ -1593,9 +1614,17 @@ impl Launcher {
     fn home(&mut self, ui: &mut egui::Ui) {
         let width = ui.available_width();
         let visible_height = ui.clip_rect().height();
-        let hero_height = (visible_height * 0.46).clamp(200.0, 300.0);
+        let hero_height = if width > 1500.0 {
+            (width / 4.0).min(visible_height * 0.58).clamp(280.0, 480.0)
+        } else {
+            (visible_height * 0.46).clamp(200.0, 300.0)
+        };
         let compact = hero_height < 250.0;
-        let picture_height = (visible_height - hero_height - 175.0).clamp(48.0, 150.0);
+        let picture_height = if width > 1500.0 {
+            (width / 9.0).clamp(150.0, 260.0)
+        } else {
+            (visible_height - hero_height - 175.0).clamp(48.0, 150.0)
+        };
         let (hero, _) = ui.allocate_exact_size(egui::vec2(width, hero_height), Sense::hover());
         let p = ui.painter().clone();
         cover(&p, &self.art.hero, hero);

@@ -150,3 +150,14 @@ mod tests {
         assert!(image.pixels[40 * 80 + 40].a() > 0);
     }
 }
+
+pub fn check() -> Result<(), String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "Could not initialize image transport")?;
+    download(&client, 324)
+        .ok_or_else(|| "Avatar download or decoding failed".into())
+        .map(|_| ())
+}
