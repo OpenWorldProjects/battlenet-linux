@@ -51,6 +51,7 @@ pub enum Command {
 pub struct Connection {
     pub commands: Sender<Command>,
     pub events: Receiver<Event>,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Connection {
     pub fn start(region: String, account: Account, ctx: eframe::egui::Context) -> Self {
@@ -62,6 +63,8 @@ impl Connection {
     fn start_account(region: String, account: Option<Account>, ctx: eframe::egui::Context) -> Self {
         let (commands, rx) = mpsc::channel();
         let (tx, events) = mpsc::channel();
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_cancelled = cancelled.clone();
         std::thread::spawn(move || {
             let emit = |event| {
                 if matches!(&event, Event::Received(_)) {
@@ -77,12 +80,24 @@ impl Connection {
                 let _ = tx.send(event);
                 ctx.request_repaint();
             };
-            if let Err(error) = run(&region, account.as_ref(), rx, &emit) {
+            if let Err(error) = run(&region, account.as_ref(), rx, &emit, &worker_cancelled) {
                 emit(Event::Failed(error));
             }
+            worker_cancelled.store(true, std::sync::atomic::Ordering::Release);
             emit(Event::Disconnected);
         });
-        Self { commands, events }
+        Self {
+            commands,
+            events,
+            cancelled,
+        }
+    }
+}
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::Release);
+        let _ = self.commands.send(Command::Disconnect);
     }
 }
 #[derive(Default)]
@@ -423,13 +438,14 @@ fn run(
     account: Option<&Account>,
     commands: Receiver<Command>,
     emit: &impl Fn(Event),
+    cancelled: &Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<()> {
-    let result = run_connection(region, account, &commands, emit, true);
+    let result = run_connection(region, account, &commands, emit, true, cancelled);
     if matches!(&result,Err(error) if error=="CACHED_SESSION_REJECTED") {
         if let Some(account) = account {
             crate::session::clear(region, account);
         }
-        return run_connection(region, account, &commands, emit, false);
+        return run_connection(region, account, &commands, emit, false, cancelled);
     }
     result
 }
@@ -439,6 +455,7 @@ fn run_connection(
     commands: &Receiver<Command>,
     emit: &impl Fn(Event),
     use_cached: bool,
+    cancelled: &Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<()> {
     if let Some(account) = account {
         account.validate()?;
@@ -521,6 +538,9 @@ fn run_connection(
     let mut last_ping = Instant::now();
     let mut names = VecDeque::new();
     loop {
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(());
+        }
         match commands.try_recv() {
             Ok(Command::Disconnect) | Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
             Ok(Command::Send(to, body)) => {
@@ -814,12 +834,14 @@ fn run_connection(
                                     .to_owned(),
                             );
                             let account = account.cloned();
+                            let cancelled = cancelled.clone();
                             let region = region.to_owned();
                             std::thread::spawn(move || {
                                 let _ = tx.send(runner::chat_ticket(
                                     &region,
                                     account.as_ref(),
                                     &challenge,
+                                    &cancelled,
                                 ));
                             });
                             auth = Some(rx);
@@ -937,7 +959,11 @@ mod phase_tests {
         let (tx, events) = mpsc::channel();
         let (commands, _) = mpsc::channel();
         let mut state = State {
-            connection: Some(Connection { commands, events }),
+            connection: Some(Connection {
+                commands,
+                events,
+                cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }),
             ..State::default()
         };
         for _ in 0..1000 {
@@ -958,7 +984,11 @@ mod phase_tests {
         let (tx, events) = mpsc::channel();
         let (commands, _) = mpsc::channel();
         let mut state = State {
-            connection: Some(Connection { commands, events }),
+            connection: Some(Connection {
+                commands,
+                events,
+                cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }),
             ..State::default()
         };
         tx.send(Event::Authorizing).unwrap();
@@ -979,5 +1009,28 @@ mod phase_tests {
         assert!(!state.connected);
         assert!(!state.friends_loaded);
         assert!(!state.authorizing);
+    }
+}
+
+#[cfg(test)]
+mod connection_lifetime_tests {
+    use super::*;
+    #[test]
+    fn replacing_connection_cancels_the_old_authentication() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (commands, received) = mpsc::channel();
+        let (_, events) = mpsc::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let connection = Connection {
+            commands,
+            events,
+            cancelled: cancelled.clone(),
+        };
+        drop(connection);
+        assert!(cancelled.load(Ordering::Acquire));
+        assert!(matches!(
+            received.recv_timeout(Duration::from_millis(100)),
+            Ok(Command::Disconnect)
+        ));
     }
 }

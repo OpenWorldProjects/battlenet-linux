@@ -48,3 +48,10 @@ https://github.com/TrinityCore/TrinityCore/blob/master/src/server/proto/Client/a
 https://github.com/superp00t/gophercraft/blob/master/bnet/bgs/protocol/authentication/v1/authentication_service.pb.go
 
 Cache binding, bounds and private atomic writes pass local tests. Live renewal still needs an authenticated connection to seed the credential cache; the noninteractive live check reached Blizzard's browser challenge but did not complete authentication. The implementation must not be described as verified password-free renewal until that round trip succeeds.
+
+
+## Login lifetime and repeated launches
+
+A chat connection owns its sign-in helper. Dropping or replacing that connection cancels the helper; Linux also terminates login helpers when their parent exits. Pressing sign-in during an existing connection attempt preserves that attempt. Reopening the launcher activates its existing window through a private local socket instead of starting another UI and authentication flow. Startup serialization includes a short retry while the first process binds its socket.
+
+Tests cover connection cancellation, termination of a waiting helper, and single-instance activation and lock release. These address concrete paths that could discard the first login result or leave an orphan password window. The user's exact two-password sequence has not been reproduced in an automated live account test. A renewal credential file was present after the reported successful connection; silent renewal across a later restart remains unverified.

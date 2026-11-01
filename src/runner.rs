@@ -86,6 +86,27 @@ pub(crate) fn system_environment(command: &mut Command) {
 }
 fn login_environment(command: &mut Command) {
     system_environment(command);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        let parent = std::process::id() as i32;
+        // Only login helpers get this hook. Game processes remain independent.
+        unsafe {
+            command.pre_exec(move || {
+                unsafe extern "C" {
+                    fn prctl(option: i32, ...) -> i32;
+                    fn getppid() -> i32;
+                }
+                if prctl(1, 15_usize, 0_usize, 0_usize, 0_usize) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if getppid() != parent {
+                    return Err(std::io::Error::from_raw_os_error(3));
+                }
+                Ok(())
+            });
+        }
+    }
     // The runtime's inherited font rules can spin WebKit before the first
     // navigation. Isolate only the packaged login helper's font configuration.
     if std::env::var_os("FLATPAK_ID").is_some() {
@@ -397,7 +418,7 @@ fn run_login(
     region: &str,
     product: Option<&str>,
 ) -> Result<Zeroizing<Vec<u8>>, String> {
-    run_login_start(helper, region, product, None, false)
+    run_login_start(helper, region, product, None, false, None)
 }
 fn run_login_start(
     helper: &Path,
@@ -405,6 +426,7 @@ fn run_login_start(
     product: Option<&str>,
     start: Option<&str>,
     check_session: bool,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<Zeroizing<Vec<u8>>, String> {
     use std::os::unix::process::ExitStatusExt;
     let mut version_command = Command::new(helper);
@@ -465,22 +487,11 @@ fn run_login_start(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let output = if let Some(start) = start {
-        let mut child = cmd.spawn().map_err(|_| "Could not open chat sign-in")?;
-        let write = child
-            .stdin
-            .take()
-            .ok_or("Missing chat sign-in input")?
-            .write_all(start.as_bytes());
-        if write.is_err() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("Could not initialize chat sign-in".into());
-        }
-        child.wait_with_output()
+        chat_login_output(cmd, start, cancelled)?
     } else {
         cmd.output()
-    }
-    .map_err(|_| "Could not open Battle.net sign-in")?;
+            .map_err(|_| "Could not open Battle.net sign-in")?
+    };
     let bytes = Zeroizing::new(output.stdout);
     let stderr = Zeroizing::new(output.stderr);
     let known = [
@@ -531,6 +542,59 @@ fn run_login_start(
         ));
     }
     Ok(bytes)
+}
+fn chat_login_output(
+    mut command: Command,
+    start: &str,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<std::process::Output, String> {
+    let is_cancelled =
+        || cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire));
+    if is_cancelled() {
+        return Err("Sign-in cancelled.".into());
+    }
+    let mut child = command.spawn().map_err(|_| "Could not open chat sign-in")?;
+    let write = child
+        .stdin
+        .take()
+        .ok_or("Missing chat sign-in input")?
+        .write_all(start.as_bytes());
+    if write.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("Could not initialize chat sign-in".into());
+    }
+    let stdout = child.stdout.take().ok_or("Missing sign-in output")?;
+    let stderr = child.stderr.take().ok_or("Missing sign-in diagnostics")?;
+    fn collect(mut pipe: impl Read, limit: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let _ = pipe.by_ref().take(limit).read_to_end(&mut bytes);
+        let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+        bytes
+    }
+    let output = std::thread::spawn(move || collect(stdout, 16384));
+    let diagnostics = std::thread::spawn(move || collect(stderr, 65536));
+    let status = loop {
+        if is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Sign-in cancelled.".into());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Could not finish chat sign-in.".into());
+            }
+        }
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: output.join().unwrap_or_default(),
+        stderr: diagnostics.join().unwrap_or_default(),
+    })
 }
 fn login_error(code: Option<i32>, signal: Option<i32>, events: &[&str]) -> String {
     if let Some(signal) = signal {
@@ -602,7 +666,7 @@ pub fn login_account(region: &str, helper: &Path) -> Result<Account, String> {
 }
 /// A cached identity is not proof that Blizzard still accepts the cookies.
 pub fn check_account_session(region: &str, helper: &Path) -> Result<Option<Account>, String> {
-    let bytes = match run_login_start(helper, region, None, None, true) {
+    let bytes = match run_login_start(helper, region, None, None, true, None) {
         Ok(bytes) => bytes,
         Err(error) if error == "SESSION_EXPIRED" => return Ok(None),
         Err(error) => return Err(error),
@@ -1046,7 +1110,12 @@ pub fn open_url(url: &str) -> Result<(), String> {
     }
 }
 
-pub fn chat_ticket(region: &str, account: Option<&Account>, start: &str) -> Result<Ticket, String> {
+pub fn chat_ticket(
+    region: &str,
+    account: Option<&Account>,
+    start: &str,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<Ticket, String> {
     if let Some(account) = account {
         account.validate()?;
     }
@@ -1054,7 +1123,14 @@ pub fn chat_ticket(region: &str, account: Option<&Account>, start: &str) -> Resu
     if start.len() > 8192 {
         return Err("Invalid chat challenge".into());
     }
-    let bytes = run_login_start(&helper, region, Some("app"), Some(start), false)?;
+    let bytes = run_login_start(
+        &helper,
+        region,
+        Some("app"),
+        Some(start),
+        false,
+        Some(cancelled),
+    )?;
     let ticket =
         Ticket::parse(std::str::from_utf8(&bytes).map_err(|_| "Invalid chat authorization.")?)?;
     if account.is_some_and(|account| ticket.account_id() != account.account_id) {
@@ -1085,5 +1161,34 @@ mod session_tests {
             .unwrap();
         assert!(!authorization_recent(&path));
         fs::remove_file(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod login_lifetime_tests {
+    use super::*;
+    #[test]
+    fn cancelled_connection_stops_its_login_child() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_flag = cancelled.clone();
+        let signal = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            worker_flag.store(true, Ordering::Release);
+        });
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "cat >/dev/null; exec sleep 60"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let started = Instant::now();
+        let result = chat_login_output(command, "synthetic input", Some(&cancelled));
+        signal.join().unwrap();
+        assert!(matches!(result,Err(error) if error=="Sign-in cancelled."));
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 }

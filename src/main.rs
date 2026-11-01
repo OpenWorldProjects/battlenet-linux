@@ -2,6 +2,7 @@ mod auth;
 mod catalog;
 mod chat;
 mod discovery;
+mod instance;
 mod patcher;
 mod runner;
 mod session;
@@ -58,6 +59,7 @@ fn texture(ctx: &egui::Context, name: &str, bytes: &[u8]) -> TextureHandle {
     )
 }
 struct Launcher {
+    instance: instance::Instance,
     game: runner::Game,
     discovered: Option<discovery::Found>,
     settings_message: Option<String>,
@@ -107,8 +109,13 @@ struct Launcher {
     build_label: Option<String>,
 }
 impl Launcher {
-    fn new(cc: &eframe::CreationContext<'_>, profile: Option<runner::Game>) -> Self {
+    fn new(
+        cc: &eframe::CreationContext<'_>,
+        profile: Option<runner::Game>,
+        mut instance: instance::Instance,
+    ) -> Self {
         let ctx = &cc.egui_ctx;
+        instance.attach(ctx.clone());
         let mut style = egui::Style::default();
         style.visuals = egui::Visuals::dark();
         style.visuals.panel_fill = BG;
@@ -235,6 +242,7 @@ impl Launcher {
         let remembered = runner::remembered_account();
         let has_account = remembered.is_some();
         let mut app = Self {
+            instance,
             build_label,
             discovered: None,
             settings_message: None,
@@ -564,6 +572,11 @@ impl Launcher {
         }
     }
     fn poll(&mut self, ctx: &egui::Context) {
+        if self.instance.activation_requested() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
         if self.chat.poll() {
             ctx.request_repaint();
         }
@@ -925,6 +938,11 @@ impl Launcher {
         if self.pending.is_some() || self.login_via_chat {
             return;
         }
+        if self.chat.connection.is_some() && !self.chat.connected {
+            self.status =
+                "A sign-in is already in progress. Complete the open Battle.net window.".into();
+            return;
+        }
         let Some(helper) = runner::login_helper() else {
             self.status =
                 "The Battle.net sign-in component is missing. Reinstall the complete launcher."
@@ -1248,6 +1266,14 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    let instance = match instance::Instance::acquire() {
+        Ok(instance::Start::Primary(instance)) => instance,
+        Ok(instance::Start::Activated) => return Ok(()),
+        Err(error) => {
+            eprintln!("Could not activate the launcher: {error}");
+            std::process::exit(1);
+        }
+    };
     let library = std::env::args().any(|arg| arg == "--library");
     let icon = image::load_from_memory(include_bytes!("../assets/battlenet-icon.png"))
         .expect("bundled icon")
@@ -1275,6 +1301,6 @@ fn main() -> eframe::Result {
                 }),
             ..Default::default()
         },
-        Box::new(move |cc| Ok(Box::new(Launcher::new(cc, profile)))),
+        Box::new(move |cc| Ok(Box::new(Launcher::new(cc, profile, instance)))),
     )
 }
